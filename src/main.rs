@@ -1,6 +1,8 @@
 use std::env;
 use std::path::Path;
 
+use python_package_compat_tester::discover_dependencies;
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -21,4 +23,24 @@ fn main() {
 
     println!("Scanning");
     println!("{}", project_path.display());
+
+    match discover_dependencies(project_path) {
+        Ok(dependencies) => {
+            if dependencies.is_empty() {
+                println!("No dependencies found.");
+                return;
+            }
+
+            println!();
+            println!("Dependencies:");
+
+            for dependency in dependencies {
+                println!("  {} ({})", dependency.name, dependency.source.display());
+            }
+        }
+        Err(error) => {
+            eprintln!("Error: {error}");
+            std::process::exit(1);
+        }
+    }
 }

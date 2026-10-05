@@ -6,3 +6,4 @@ rust-version = "1.85"
 description = "Find Python versions compatible with a project's dependencies."
 
 [dependencies]
+toml = "0.9"
