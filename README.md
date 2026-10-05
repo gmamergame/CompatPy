@@ -5,25 +5,15 @@ they support, and recommends a compatible version.
 
 ## Development setup
 
-Create and activate a virtual environment, then install the project with its
-development tools:
+Install the Rust toolchain, then run the project from the repository root:
 
 ```powershell
-py -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
+cargo run -- --help
+cargo test
 ```
 
-Run the test suite and lint checks:
-
-```powershell
-python -m pytest
-ruff check .
-```
-
-The `pysure` command is the package's CLI entry point. The initial workspace is
-set up for implementing the analysis workflow:
+The initial Rust CLI provides help and version information. The analysis workflow
+will be implemented in these stages:
 
 1. Discover dependencies from project files and Python imports.
 2. Retrieve package metadata, including `Requires-Python`, from PyPI.
