@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "pysure"
+name = "python-package-compat-tester"
 version = "0.1.0"

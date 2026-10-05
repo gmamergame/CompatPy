@@ -1,18 +1,24 @@
-use pysure::{Command, VERSION, parse_args};
 use std::env;
-use std::process;
-
-const HELP: &str = "PySure - find Python versions compatible with a project's dependencies.\n\nUsage: pysure [--help | --version]\n";
+use std::path::Path;
 
 fn main() {
-    let args: Vec<String> = env::args().skip(1).collect();
+    let args: Vec<String> = env::args().collect();
 
-    match parse_args(&args) {
-        Ok(Command::Help) => print!("{HELP}"),
-        Ok(Command::Version) => println!("pysure {VERSION}"),
-        Err(message) => {
-            eprintln!("pysure: {message}");
-            process::exit(2);
-        }
+    if args.len() != 2 {
+        eprintln!("Usage: python-package-compat-tester <project-directory>");
+        std::process::exit(1);
     }
+
+    let project_path = Path::new(&args[1]);
+
+    if !project_path.exists() || !project_path.is_dir() {
+        eprintln!(
+            "Error: '{}' is not a valid directory.",
+            project_path.display()
+        );
+        std::process::exit(1);
+    }
+
+    println!("Scanning");
+    println!("{}", project_path.display());
 }
