@@ -1,3 +1,4 @@
+use std::fmt::format;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -38,6 +39,20 @@ pub struct Dependency {
     pub specifier: Option<String>,
     pub marker: Option<String>,
     pub source: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageMetadata {
+    pub name: String,
+    pub latest_version: String,
+    pub requires_python: Option<String>,
+    pub releases: Vec<PackageRelease>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageRelease {
+    pub version: String,
+    pub requires_python: Option<String>,
 }
 
 pub fn discover_dependencies(project_path: &Path) -> Result<Vec<Dependency>, String> {
@@ -87,6 +102,78 @@ pub fn discover_dependencies(project_path: &Path) -> Result<Vec<Dependency>, Str
     });
     test_debug!("discover_dependencies: final dependencies: {dependencies:#?}");
     Ok(dependencies)
+}
+
+pub fn fetch_pypi_metadata(package_name: &str) -> Result<PackageMetadata, String> {
+    let normalized_name = normalize_package_name(package_name);
+
+    let url = format!("https://pypi.org/pypi/{normalized_name}/json");
+
+    test_debug!("fetch_pypi_metadata: requesting '{url}'");
+
+    let response = reqwest::blocking::get(&url)
+        .map_err(|error| format!("failed to query PyPI for '{normalized_name}': {error}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "PyPI returned HTTP {} for package '{normalized_name}'",
+            response.status()
+        ));
+    }
+
+    let body = response
+        .text()
+        .map_err(|error| format!("failed to read PyPI response: {error}"))?;
+
+    parse_pypi_metadata(&body)
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct PyPiResponse {
+    info: PyPiInfo,
+    releases: std::collections::HashMap<String, Vec<PyPiReleaseFile>>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct PyPiInfo {
+    name: String,
+    version: String,
+    requires_python: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct PyPiReleaseFile {
+    requires_python: Option<String>,
+}
+
+fn parse_metadata(contents: &str) -> Result<PackageMetadata, String> {
+    let metadata: PyPiResponse = serde_json::from_str(contents)
+        .map_err(|error| format!("failed to parse PyPI metadata: {error}"))?;
+
+    let mut releases = metadata
+        .releases
+        .into_iter()
+        .map(|(version, files)| {
+            let requires_python = files
+                .into_iter()
+                .filter_map(|file| file.requires_python)
+                .next();
+
+            PackageRelease {
+                version,
+                requires_python,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    releases.sort_by(|left, right| right.version.cmp(&right.version));
+
+    Ok(PackageMetadata {
+        name: normalize_package_name(&metadata.info.name),
+        latest_version: metadata.info.version,
+        requires_python: metadata.info.requires_python,
+        releases,
+    })
 }
 
 fn dependency_files(project_path: &Path) -> Result<Vec<PathBuf>, String> {
@@ -263,6 +350,36 @@ fn normalize_package_name(name: &str) -> String {
     normalized
 }
 
+fn parse_pypi_metadata(contents: &str) -> Result<PackageMetadata, String> {
+    let metadata: PyPiResponse = serde_json::from_str(contents)
+        .map_err(|error| format!("failed to parse PyPI metadata: {error}"))?;
+
+    let mut releases = metadata
+        .releases
+        .into_iter()
+        .map(|(version, files)| {
+            let requires_python = files
+                .into_iter()
+                .filter_map(|file| file.requires_python)
+                .next();
+
+            PackageRelease {
+                version,
+                requires_python,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    releases.sort_by(|left, right| left.version.cmp(&right.version));
+
+    Ok(PackageMetadata {
+        name: normalize_package_name(&metadata.info.name),
+        latest_version: metadata.info.version,
+        requires_python: metadata.info.requires_python,
+        releases,
+    })
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -355,6 +472,51 @@ dependencies = [
         assert_eq!(dependencies[1].marker, None);
 
         fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn parses_pypi_metadata() {
+        let json = r#"
+        {
+            "info": {
+                "name": "Example-Package",
+                "version": "2.0.0",
+                "requires_python": ">=3.9"
+            },
+            "releases": {
+                "1.0.0": [
+                    {
+                        "requires_python": ">=3.7"
+                    }
+                ],
+                "2.0.0": [
+                    {
+                        "requires_python": ">=3.9"
+                    }
+                ]
+            }
+        }
+        "#;
+
+        let metadata = super::parse_pypi_metadata(json).unwrap();
+
+        assert_eq!(metadata.name, "example-package");
+        assert_eq!(metadata.latest_version, "2.0.0");
+        assert_eq!(metadata.requires_python, Some(">=3.9".to_owned()));
+
+        assert_eq!(
+            metadata.releases,
+            vec![
+                super::PackageRelease {
+                    version: "1.0.0".to_owned(),
+                    requires_python: Some(">=3.7".to_owned()),
+                },
+                super::PackageRelease {
+                    version: "2.0.0".to_owned(),
+                    requires_python: Some(">=3.9".to_owned()),
+                },
+            ]
+        )
     }
 
     fn temporary_project() -> std::path::PathBuf {
