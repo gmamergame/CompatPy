@@ -146,36 +146,6 @@ struct PyPiReleaseFile {
     requires_python: Option<String>,
 }
 
-fn parse_metadata(contents: &str) -> Result<PackageMetadata, String> {
-    let metadata: PyPiResponse = serde_json::from_str(contents)
-        .map_err(|error| format!("failed to parse PyPI metadata: {error}"))?;
-
-    let mut releases = metadata
-        .releases
-        .into_iter()
-        .map(|(version, files)| {
-            let requires_python = files
-                .into_iter()
-                .filter_map(|file| file.requires_python)
-                .next();
-
-            PackageRelease {
-                version,
-                requires_python,
-            }
-        })
-        .collect::<Vec<_>>();
-
-    releases.sort_by(|_left, right| right.version.cmp(&right.version));
-
-    Ok(PackageMetadata {
-        name: normalize_package_name(&metadata.info.name),
-        latest_version: metadata.info.version,
-        requires_python: metadata.info.requires_python,
-        releases,
-    })
-}
-
 fn dependency_files(project_path: &Path) -> Result<Vec<PathBuf>, String> {
     test_debug!("dependency_files: scanning '{}'", project_path.display());
     let mut files = Vec::new();
