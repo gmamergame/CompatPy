@@ -36,10 +36,9 @@ fn main() {
 
             for dependency in dependencies {
                 println!(
-                    "  {} | required: {} | installed: {} | ({})",
+                    "  {} | required: {} | ({})",
                     dependency.name,
                     dependency.specifier.as_deref().unwrap_or("any"),
-                    dependency.version.as_deref().unwrap_or("not installed"),
                     dependency.source.display()
                 );
             }
