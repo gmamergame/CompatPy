@@ -349,10 +349,79 @@ fn parse_pypi_metadata(contents: &str) -> Result<PackageMetadata, String> {
     })
 }
 
+pub fn select_package_release<'a>(
+    metadata: &'a PackageMetadata,
+    specifier: Option<&str>,
+) -> Option<&'a PackageRelease> {
+    let matching = metadata.releases.iter().filter(|release| {
+        specifier
+            .map(|specifier| package_version_satisfies(&release.version, specifier))
+            .unwrap_or(true)
+    });
+
+    matching.max_by(|left, right| compare_versions(&left.version, &right.version))
+}
+
+fn compare_versions(left: &str, right: &str) -> std::cmp::Ordering {
+    let left_parts = parse_package_version(left);
+    let right_parts = parse_package_version(right);
+
+    left_parts.cmp(&right_parts)
+}
+
+fn parse_package_version(version: &str) -> Vec<u64> {
+    version
+        .split('.')
+        .map(|part| {
+            part.chars()
+                .take_while(|character| character.is_ascii_digit())
+                .collect::<String>()
+                .parse::<u64>()
+                .unwrap_or(0)
+        })
+        .collect()
+}
+
+fn package_version_satisfies(version: &str, requirement: &str) -> bool {
+    requirement
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .all(|part| satisfies_package_specifier(version, part))
+}
+
+fn satisfies_package_specifier(version: &str, specifier: &str) -> bool {
+    let operators = [">=", "<=", "==", "!=", ">", "<"];
+
+    let (operator, required) = operators
+        .iter()
+        .find_map(|operator| {
+            specifier
+                .strip_prefix(operator)
+                .map(|required| (*operator, required.trim()))
+        })
+        .unwrap_or(("==", specifier.trim()));
+
+    let comparison = compare_versions(version, required);
+
+    match operator {
+        ">=" => comparison != std::cmp::Ordering::Less,
+        "<=" => comparison != std::cmp::Ordering::Greater,
+        "==" => comparison == std::cmp::Ordering::Equal,
+        "!=" => comparison != std::cmp::Ordering::Equal,
+        ">" => comparison == std::cmp::Ordering::Greater,
+        "<" => comparison == std::cmp::Ordering::Less,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
-    use super::{Command, Dependency, discover_dependencies, normalize_package_name, parse_args};
+    use super::{
+        Command, Dependency, discover_dependencies, normalize_package_name, parse_args,
+        select_package_release,
+    };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -486,6 +555,80 @@ dependencies = [
                 },
             ]
         )
+    }
+
+    #[test]
+    fn selects_exact_package_version() {
+        let metadata = super::PackageMetadata {
+            name: "uvicorn".to_owned(),
+            latest_version: "0.54.0".to_owned(),
+            requires_python: Some(">=3.10".to_owned()),
+            releases: vec![
+                super::PackageRelease {
+                    version: "0.29.0".to_owned(),
+                    requires_python: Some(">=3.8".to_owned()),
+                },
+                super::PackageRelease {
+                    version: "0.54.0".to_owned(),
+                    requires_python: Some(">=3.10".to_owned()),
+                },
+            ],
+        };
+
+        let release = select_package_release(&metadata, Some("==0.29.0")).unwrap();
+
+        assert_eq!(release.version, "0.29.0");
+        assert_eq!(release.requires_python, Some(">=3.8".to_owned()));
+    }
+
+    #[test]
+    fn selects_latest_matching_package_version() {
+        let metadata = super::PackageMetadata {
+            name: "example".to_owned(),
+            latest_version: "2.0.0".to_owned(),
+            requires_python: None,
+            releases: vec![
+                super::PackageRelease {
+                    version: "1.0.0".to_owned(),
+                    requires_python: None,
+                },
+                super::PackageRelease {
+                    version: "1.5.0".to_owned(),
+                    requires_python: None,
+                },
+                super::PackageRelease {
+                    version: "2.0.0".to_owned(),
+                    requires_python: None,
+                },
+            ],
+        };
+
+        let release = select_package_release(&metadata, Some(">=1.0,<2.0")).unwrap();
+
+        assert_eq!(release.version, "1.5.0");
+    }
+
+    #[test]
+    fn selects_latest_release_without_specifier() {
+        let metadata = super::PackageMetadata {
+            name: "example".to_owned(),
+            latest_version: "2.0.0".to_owned(),
+            requires_python: None,
+            releases: vec![
+                super::PackageRelease {
+                    version: "1.0.0".to_owned(),
+                    requires_python: None,
+                },
+                super::PackageRelease {
+                    version: "2.0.0".to_owned(),
+                    requires_python: None,
+                },
+            ],
+        };
+
+        let release = select_package_release(&metadata, None).unwrap();
+
+        assert_eq!(release.version, "2.0.0");
     }
 
     fn temporary_project() -> std::path::PathBuf {

@@ -1,7 +1,7 @@
 use std::env;
 use std::path::Path;
 
-use compatpy::{discover_dependencies, fetch_pypi_metadata};
+use compatpy::{discover_dependencies, fetch_pypi_metadata, select_package_release};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -44,11 +44,18 @@ fn main() {
 
                 match fetch_pypi_metadata(&dependency.name) {
                     Ok(metadata) => {
-                        println!(
-                            "    PyPI: {} | requires Python: {}",
-                            metadata.latest_version,
-                            metadata.requires_python.as_deref().unwrap_or("any")
-                        );
+                        match select_package_release(&metadata, dependency.specifier.as_deref()) {
+                            Some(release) => {
+                                println!(
+                                    "    PyPI: {} | requires Python: {}",
+                                    release.version,
+                                    release.requires_python.as_deref().unwrap_or("any")
+                                );
+                            }
+                            None => {
+                                println!("    PyPI: no matching release");
+                            }
+                        }
                     }
                     Err(error) => {
                         println!("    PyPI: unavailable ({error})");
