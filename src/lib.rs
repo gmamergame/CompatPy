@@ -166,7 +166,7 @@ fn parse_metadata(contents: &str) -> Result<PackageMetadata, String> {
         })
         .collect::<Vec<_>>();
 
-    releases.sort_by(|left, right| right.version.cmp(&right.version));
+    releases.sort_by(|_left, right| right.version.cmp(&right.version));
 
     Ok(PackageMetadata {
         name: normalize_package_name(&metadata.info.name),
