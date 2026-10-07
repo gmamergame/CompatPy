@@ -1,6 +1,6 @@
-# PySure
+# CompatPy
 
-PySure analyzes a Python project's dependencies, determines which Python versions
+CompatPy analyzes a Python project's dependencies, determines which Python versions
 they support, and recommends a compatible version.
 
 ## Development setup

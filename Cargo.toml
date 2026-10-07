@@ -1,5 +1,5 @@
 [package]
-name = "python-package-compat-tester"
+name = "compatpy"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"

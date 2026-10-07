@@ -1,8 +1,8 @@
 from pathlib import Path
 
-content = """# PySure - Project Plan
+content = """# CompatPy - Project Plan
 
-> **PySure** analyzes a Python project, determines which Python versions its dependencies are compatible with, and helps the user create an environment using a compatible Python version.
+> **CompatPy** analyzes a Python project, determines which Python versions its dependencies are compatible with, and helps the user create an environment using a compatible Python version.
 
 ## 1. Project Goal
 
@@ -10,23 +10,23 @@ Solve a common Python developer problem:
 
 > "I found a Python project, but the author never told me which Python version it was made for."
 
-PySure should scan a project, inspect its dependencies and package metadata, calculate the Python versions that are compatible according to the available metadata, recommend the best version, and eventually help set up that environment automatically.
+CompatPy should scan a project, inspect its dependencies and package metadata, calculate the Python versions that are compatible according to the available metadata, recommend the best version, and eventually help set up that environment automatically.
 
 ### Core promise
 
 **Scan → Resolve → Recommend → Set up**
 
-PySure should make it possible to go from an unknown Python project to a working Python environment with as little manual dependency archaeology as possible.
+CompatPy should make it possible to go from an unknown Python project to a working Python environment with as little manual dependency archaeology as possible.
 
 ---
 
 ## 2. Stardance Submission Requirements
 
-PySure should explicitly satisfy the submission requirements.
+CompatPy should explicitly satisfy the submission requirements.
 
 ### 2.1 Clear quality-of-life improvement
 
-PySure removes the need to manually:
+CompatPy removes the need to manually:
 
 - identify every dependency
 - look up each package on PyPI
