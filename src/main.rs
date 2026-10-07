@@ -1,13 +1,13 @@
 use std::env;
 use std::path::Path;
 
-use python_package_compat_tester::discover_dependencies;
+use compatpy::discover_dependencies;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() != 2 {
-        eprintln!("Usage: python-package-compat-tester <project-directory>");
+        eprintln!("Usage: compatpy <project-directory>");
         std::process::exit(1);
     }
 
@@ -35,7 +35,13 @@ fn main() {
             println!("Dependencies:");
 
             for dependency in dependencies {
-                println!("  {} ({})", dependency.name, dependency.source.display());
+                println!(
+                    "  {} | required: {} | installed: {} | ({})",
+                    dependency.name,
+                    dependency.specifier.as_deref().unwrap_or("any"),
+                    dependency.version.as_deref().unwrap_or("not installed"),
+                    dependency.source.display()
+                );
             }
         }
         Err(error) => {

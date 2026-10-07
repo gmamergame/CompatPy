@@ -35,6 +35,7 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Dependency {
     pub name: String,
+    pub version: Option<String>,
     pub specifier: Option<String>,
     pub marker: Option<String>,
     pub source: PathBuf,
@@ -237,12 +238,17 @@ fn add_requirement(requirement: &str, source: &Path, dependencies: &mut Vec<Depe
 
     let specifier = (!specifier_part.is_empty()).then(|| specifier_part.to_owned());
 
+    let normalized_name = normalize_package_name(name);
+    let version = installed_version(&normalized_name);
+
     let dependency = Dependency {
-        name: normalize_package_name(name),
+        name: normalized_name,
+        version,
         specifier,
         marker,
         source: source.to_path_buf(),
     };
+
     test_debug!("add_requirement: normalized dependency {dependency:#?}");
     if !dependencies.contains(&dependency) {
         dependencies.push(dependency);
@@ -260,8 +266,31 @@ fn normalize_package_name(name: &str) -> String {
     normalized
 }
 
+fn installed_version(package_name: &str) -> Option<String> {
+    let output = std::process::Command::new("python")
+        .args([
+            "-c",
+            "import importlib.metadata, sys; \
+             print(importlib.metadata.version(sys.argv[1]))",
+            package_name,
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let version = String::from_utf8(output.stdout).ok()?;
+    let version = version.trim();
+
+    (!version.is_empty()).then(|| version.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::installed_version;
+
     use super::{Command, Dependency, discover_dependencies, normalize_package_name, parse_args};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -302,25 +331,27 @@ mod tests {
             vec![
                 Dependency {
                     name: "flask".to_owned(),
+                    version: installed_version("flask"),
                     specifier: Some("==3.0".to_owned()),
                     marker: None,
                     source: project.join("requirements.txt"),
                 },
                 Dependency {
                     name: "requests".to_owned(),
+                    version: installed_version("requests"),
                     specifier: Some(">=2.0".to_owned()),
                     marker: None,
                     source: project.join("requirements.txt"),
                 },
                 Dependency {
                     name: "requests".to_owned(),
+                    version: installed_version("requests"),
                     specifier: None,
                     marker: None,
                     source: project.join("requirements.txt"),
                 },
             ]
         );
-
         fs::remove_dir_all(project).unwrap();
     }
 
@@ -360,7 +391,7 @@ dependencies = [
             .unwrap()
             .as_nanos();
 
-        let path = std::env::temp_dir().join(format!("python-package-compat-tester-{timestamp}"));
+        let path = std::env::temp_dir().join(format!("compatpy-{timestamp}"));
 
         fs::create_dir_all(&path).unwrap();
         path
