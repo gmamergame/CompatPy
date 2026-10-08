@@ -1,12 +1,12 @@
 [package]
 name = "compatpy"
-version = "1.0.0"
+version = "26.10.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Find Python versions compatible with a project's dependencies."
 readme = "README.md"
 license = "MIT"
-repository = "https://github.com/gmamergame/CompatPy"
+repository = "https://github.com/oluxid/CompatPy"
 keywords = ["python", "compatibility", "dependencies", "cli"]
 categories = ["command-line-utilities", "development-tools"]
 
