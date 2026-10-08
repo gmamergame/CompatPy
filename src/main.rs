@@ -1,7 +1,9 @@
 use std::env;
 use std::path::Path;
 
-use compatpy::{discover_dependencies, fetch_pypi_metadata, select_package_release};
+use compatpy::{
+    compatible_python_versions, discover_dependencies, fetch_pypi_metadata, select_package_release,
+};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -34,6 +36,8 @@ fn main() {
             println!();
             println!("Dependencies:");
 
+            let mut selected_releases = Vec::new();
+
             for dependency in dependencies {
                 println!(
                     "  {} | required: {} | ({})",
@@ -51,6 +55,8 @@ fn main() {
                                     release.version,
                                     release.requires_python.as_deref().unwrap_or("any")
                                 );
+
+                                selected_releases.push(release.clone());
                             }
                             None => {
                                 println!("    PyPI: no matching release");
@@ -60,6 +66,19 @@ fn main() {
                     Err(error) => {
                         println!("    PyPI: unavailable ({error})");
                     }
+                }
+            }
+
+            println!();
+            println!("compatible Python versions:");
+
+            let compatible_versions = compatible_python_versions(&selected_releases);
+
+            if compatible_versions.is_empty() {
+                println!("  None");
+            } else {
+                for version in compatible_versions {
+                    println!("  {version}");
                 }
             }
         }

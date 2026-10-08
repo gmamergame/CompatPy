@@ -368,6 +368,65 @@ pub fn select_package_release<'a>(
         .or_else(|| matching.max_by(|left, right| compare_versions(&left.version, &right.version)))
 }
 
+pub fn compatible_python_versions(releases: &[PackageRelease]) -> Vec<String> {
+    let mut compatible_versions = vec![
+        "3.7".to_owned(),
+        "3.8".to_owned(),
+        "3.9".to_owned(),
+        "3.10".to_owned(),
+        "3.11".to_owned(),
+        "3.12".to_owned(),
+        "3.13".to_owned(),
+        "3.14".to_owned(),
+    ];
+
+    for release in releases {
+        if let Some(requirement) = &release.requires_python {
+            compatible_versions
+                .retain(|python_version| python_version_satisfies(python_version, requirement));
+        }
+
+        if compatible_versions.is_empty() {
+            break;
+        }
+    }
+
+    compatible_versions
+}
+
+fn python_version_satisfies(version: &str, requirement: &str) -> bool {
+    requirement
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .all(|part| satisfies_python_specifier(version, part))
+}
+
+fn satisfies_python_specifier(version: &str, specifier: &str) -> bool {
+    let operators = [">=", "<=", "==", "!=", ">", "<"];
+
+    let (operator, required) = operators
+        .iter()
+        .find_map(|operator| {
+            specifier
+                .strip_prefix(operator)
+                .map(|required| (*operator, required.trim()))
+        })
+        .unwrap_or(("==", specifier.trim()));
+
+    let comparison = compare_versions(version, required);
+
+    match operator {
+        ">=" => comparison != std::cmp::Ordering::Less,
+        "<=" => comparison != std::cmp::Ordering::Greater,
+        "==" => comparison == std::cmp::Ordering::Equal,
+        "!=" => comparison != std::cmp::Ordering::Equal,
+        ">" => comparison == std::cmp::Ordering::Greater,
+        "<" => comparison == std::cmp::Ordering::Less,
+        _ => false,
+    }
+}
+
 fn is_prerelease(version: &str) -> bool {
     let parsed = parse_package_version(version);
     parsed.prerelease.is_some()
@@ -795,6 +854,57 @@ dependencies = [
         let release = select_package_release(&metadata, Some(">=2.0.0")).unwrap();
 
         assert_eq!(release.version, "3.0.0");
+    }
+
+    #[test]
+    fn finds_compatible_python_versions() {
+        let release1 = super::PackageRelease {
+            version: "1.0.0".to_owned(),
+            requires_python: Some(">=3.10".to_owned()),
+        };
+
+        let release2 = super::PackageRelease {
+            version: "2.0.0".to_owned(),
+            requires_python: Some(">=3.11".to_owned()),
+        };
+
+        let release3 = super::PackageRelease {
+            version: "3.0.0".to_owned(),
+            requires_python: Some(">=3.12".to_owned()),
+        };
+
+        let releases = vec![release1, release2, release3];
+
+        let compatible = super::compatible_python_versions(&releases);
+
+        assert_eq!(
+            compatible,
+            vec!["3.12".to_owned(), "3.13".to_owned(), "3.14".to_owned(),]
+        );
+    }
+
+    #[test]
+    fn excludes_specific_python_versions() {
+        let release = super::PackageRelease {
+            version: "1.0.0".to_owned(),
+            requires_python: Some(">=3.8, !=3.9".to_owned()),
+        };
+
+        let releases = vec![release];
+
+        let compatible = super::compatible_python_versions(&releases);
+
+        assert_eq!(
+            compatible,
+            vec![
+                "3.8".to_owned(),
+                "3.10".to_owned(),
+                "3.11".to_owned(),
+                "3.12".to_owned(),
+                "3.13".to_owned(),
+                "3.14".to_owned(),
+            ]
+        );
     }
 
     fn temporary_project() -> std::path::PathBuf {
