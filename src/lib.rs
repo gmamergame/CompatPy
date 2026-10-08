@@ -528,6 +528,14 @@ fn satisfies_package_specifier(version: &str, specifier: &str) -> bool {
         })
         .unwrap_or(("==", specifier.trim()));
 
+    if operator == "==" && required.ends_with(".*") {
+        let prefix = &required[..required.len() - 2];
+
+        return version == prefix
+            || version
+                .strip_prefix(prefix)
+                .is_some_and(|suffix| suffix.starts_with('.'));
+    }
     let comparison = compare_versions(version, required);
 
     match operator {
@@ -950,6 +958,22 @@ dependencies = [
         assert!(package_version_satisfies("3.12.0", "~=3.12"));
         assert!(package_version_satisfies("3.14.0", "~=3.12"));
         assert!(!package_version_satisfies("4.0.0", "~=3.12"));
+    }
+
+    #[test]
+    fn supports_equal_version_wildcard() {
+        use super::package_version_satisfies;
+
+        assert!(package_version_satisfies("3.12.0", "==3.12.*"));
+        assert!(package_version_satisfies("3.12.5", "==3.12.*"));
+        assert!(package_version_satisfies("3.12", "==3.12.*"));
+        println!(
+            "result: {}",
+            package_version_satisfies("3.13.0", "==3.12.*")
+        );
+        println!("prefix test: {:?}", "3.13.0".strip_prefix("3.12"));
+        assert!(!package_version_satisfies("3.13.0", "==3.12.*"));
+        assert!(!package_version_satisfies("3.120.0", "==3.12.*"));
     }
 
     fn temporary_project() -> std::path::PathBuf {
