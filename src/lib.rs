@@ -517,7 +517,7 @@ fn package_version_satisfies(version: &str, requirement: &str) -> bool {
 }
 
 fn satisfies_package_specifier(version: &str, specifier: &str) -> bool {
-    let operators = [">=", "<=", "==", "!=", ">", "<"];
+    let operators = ["~=", ">=", "<=", "==", "!=", ">", "<"];
 
     let (operator, required) = operators
         .iter()
@@ -531,6 +531,38 @@ fn satisfies_package_specifier(version: &str, specifier: &str) -> bool {
     let comparison = compare_versions(version, required);
 
     match operator {
+        "~=" => {
+            let parts: Vec<&str> = required.split('.').collect();
+
+            if parts.len() < 2 || parts.iter().any(|part| part.parse::<u64>().is_err()) {
+                return false;
+            }
+
+            let mut upper_parts: Vec<u64> = parts[..parts.len() - 1]
+                .iter()
+                .map(|part| part.parse::<u64>().unwrap())
+                .collect();
+
+            let Some(last) = upper_parts.last_mut() else {
+                return false;
+            };
+
+            let Some(next) = last.checked_add(1) else {
+                return false;
+            };
+
+            *last = next;
+            upper_parts.push(0);
+
+            let upper_bound = upper_parts
+                .iter()
+                .map(u64::to_string)
+                .collect::<Vec<_>>()
+                .join(".");
+
+            comparison != std::cmp::Ordering::Less
+                && compare_versions(version, &upper_bound) == std::cmp::Ordering::Less
+        }
         ">=" => comparison != std::cmp::Ordering::Less,
         "<=" => comparison != std::cmp::Ordering::Greater,
         "==" => comparison == std::cmp::Ordering::Equal,
@@ -905,6 +937,19 @@ dependencies = [
                 "3.14".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn supports_compatible_release_operator() {
+        use super::package_version_satisfies;
+
+        assert!(package_version_satisfies("3.12.0", "~=3.12.0"));
+        assert!(package_version_satisfies("3.12.5", "~=3.12.0"));
+        assert!(!package_version_satisfies("3.13.0", "~=3.12.0"));
+
+        assert!(package_version_satisfies("3.12.0", "~=3.12"));
+        assert!(package_version_satisfies("3.14.0", "~=3.12"));
+        assert!(!package_version_satisfies("4.0.0", "~=3.12"));
     }
 
     fn temporary_project() -> std::path::PathBuf {
