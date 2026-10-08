@@ -359,27 +359,94 @@ pub fn select_package_release<'a>(
             .unwrap_or(true)
     });
 
-    matching.max_by(|left, right| compare_versions(&left.version, &right.version))
+    let stable = matching
+        .clone()
+        .filter(|release| !is_prerelease(&release.version))
+        .max_by(|left, right| compare_versions(&left.version, &right.version));
+
+    stable
+        .or_else(|| matching.max_by(|left, right| compare_versions(&left.version, &right.version)))
+}
+
+fn is_prerelease(version: &str) -> bool {
+    let parsed = parse_package_version(version);
+    parsed.prerelease.is_some()
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ParsedPackageVersion {
+    release: Vec<u64>,
+    prerelease: Option<Prerelease>,
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Prerelease {
+    Alpha(u64),
+    Beta(u64),
+    Rc(u64),
 }
 
 fn compare_versions(left: &str, right: &str) -> std::cmp::Ordering {
-    let left_parts = parse_package_version(left);
-    let right_parts = parse_package_version(right);
+    let left_version = parse_package_version(left);
+    let right_version = parse_package_version(right);
 
-    left_parts.cmp(&right_parts)
+    match left_version.release.cmp(&right_version.release) {
+        std::cmp::Ordering::Equal => match (&left_version.prerelease, &right_version.prerelease) {
+            (None, None) => std::cmp::Ordering::Equal,
+
+            //stable releases are newer than prereleases.
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (Some(_), None) => std::cmp::Ordering::Less,
+
+            //both are  prereleases, so compare their actual prerelease versions.
+            (Some(left), Some(right)) => left.cmp(right),
+        },
+
+        ordering => ordering,
+    }
 }
 
-fn parse_package_version(version: &str) -> Vec<u64> {
-    version
+fn parse_package_version(version: &str) -> ParsedPackageVersion {
+    let version = version.trim().to_ascii_lowercase();
+
+    let (release_part, prerelease) = if let Some(index) = version.find("rc") {
+        (
+            &version[..index],
+            Some(Prerelease::Rc(
+                version[index + 2..].parse::<u64>().unwrap_or(0),
+            )),
+        )
+    } else if let Some(index) = version.find('a') {
+        (
+            &version[..index],
+            Some(Prerelease::Alpha(
+                version[index + 1..].parse::<u64>().unwrap_or(0),
+            )),
+        )
+    } else if let Some(index) = version.find('b') {
+        (
+            &version[..index],
+            Some(Prerelease::Beta(
+                version[index + 1..].parse::<u64>().unwrap_or(0),
+            )),
+        )
+    } else {
+        (version.as_str(), None)
+    };
+
+    let mut release = release_part
         .split('.')
-        .map(|part| {
-            part.chars()
-                .take_while(|character| character.is_ascii_digit())
-                .collect::<String>()
-                .parse::<u64>()
-                .unwrap_or(0)
-        })
-        .collect()
+        .map(|part| part.parse::<u64>().unwrap_or(0))
+        .collect::<Vec<_>>();
+
+    while release.len() < 3 {
+        release.push(0);
+    }
+
+    ParsedPackageVersion {
+        release,
+        prerelease,
+    }
 }
 
 fn package_version_satisfies(version: &str, requirement: &str) -> bool {
@@ -629,6 +696,105 @@ dependencies = [
         let release = select_package_release(&metadata, None).unwrap();
 
         assert_eq!(release.version, "2.0.0");
+    }
+
+    #[test]
+    fn exact_version_does_not_match_prerelease() {
+        let metadata = super::PackageMetadata {
+            name: "example".to_owned(),
+            latest_version: "3.9.0".to_owned(),
+            requires_python: None,
+            releases: vec![
+                super::PackageRelease {
+                    version: "3.9.0rc2".to_owned(),
+                    requires_python: None,
+                },
+                super::PackageRelease {
+                    version: "3.9.0".to_owned(),
+                    requires_python: None,
+                },
+            ],
+        };
+
+        let release = select_package_release(&metadata, Some("==3.9.0")).unwrap();
+
+        assert_eq!(release.version, "3.9.0");
+    }
+
+    #[test]
+    fn stable_release_beats_prerelease() {
+        let metadata = super::PackageMetadata {
+            name: "example".to_owned(),
+            latest_version: "4.0.0".to_owned(),
+            requires_python: None,
+            releases: vec![
+                super::PackageRelease {
+                    version: "3.9.0".to_owned(),
+                    requires_python: None,
+                },
+                super::PackageRelease {
+                    version: "3.9.0rc2".to_owned(),
+                    requires_python: None,
+                },
+                super::PackageRelease {
+                    version: "4.0.0a1".to_owned(),
+                    requires_python: None,
+                },
+                super::PackageRelease {
+                    version: "4.0.0".to_owned(),
+                    requires_python: None,
+                },
+            ],
+        };
+
+        let release = select_package_release(&metadata, Some(">=3.8.0")).unwrap();
+
+        assert_eq!(release.version, "4.0.0");
+    }
+
+    #[test]
+    fn prerelease_versions_are_ordered_correctly() {
+        assert_eq!(
+            super::compare_versions("3.9.0a1", "3.9.0b1"),
+            std::cmp::Ordering::Less
+        );
+
+        assert_eq!(
+            super::compare_versions("3.9.0b1", "3.9.0rc1"),
+            std::cmp::Ordering::Less
+        );
+
+        assert_eq!(
+            super::compare_versions("3.9.0rc1", "3.9.0"),
+            std::cmp::Ordering::Less
+        );
+    }
+
+    #[test]
+    fn prefers_stable_release_over_prerelease() {
+        let metadata = super::PackageMetadata {
+            name: "example".to_owned(),
+            latest_version: "3.1.0rc0".to_owned(),
+            requires_python: None,
+            releases: vec![
+                super::PackageRelease {
+                    version: "2.9.0".to_owned(),
+                    requires_python: None,
+                },
+                super::PackageRelease {
+                    version: "3.0.0".to_owned(),
+                    requires_python: None,
+                },
+                super::PackageRelease {
+                    version: "3.1.0rc0".to_owned(),
+                    requires_python: None,
+                },
+            ],
+        };
+
+        let release = select_package_release(&metadata, Some(">=2.0.0")).unwrap();
+
+        assert_eq!(release.version, "3.0.0");
     }
 
     fn temporary_project() -> std::path::PathBuf {
