@@ -1,9 +1,14 @@
 [package]
 name = "compatpy"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Find Python versions compatible with a project's dependencies."
+readme = "README.md"
+license = "MIT"
+repository = "https://github.com/gmamergame/CompatPy"
+keywords = ["python", "compatibility", "dependencies", "cli"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 reqwest = { version = "0.12", features = ["blocking", "json", "rustls-tls"] }
