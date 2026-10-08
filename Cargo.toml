@@ -9,6 +9,7 @@ license = "MIT"
 repository = "https://github.com/oluxid/CompatPy"
 keywords = ["python", "compatibility", "dependencies", "cli"]
 categories = ["command-line-utilities", "development-tools"]
+exclude = ["plan.md"]
 
 [dependencies]
 reqwest = { version = "0.12", features = ["blocking", "json", "rustls-tls"] }
