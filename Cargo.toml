@@ -4,6 +4,7 @@ version = "26.10.1"
 edition = "2024"
 rust-version = "1.85"
 description = "Find Python versions compatible with a project's dependencies."
+authors = ["oluxid"]
 readme = "README.md"
 license = "MIT"
 repository = "https://github.com/oluxid/CompatPy"
