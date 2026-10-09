@@ -40,6 +40,12 @@ jobs:
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
             sudo dpkg --add-architecture arm64
             sudo apt-get update
+            echo "=== APT sources ==="
+            grep -R -n -E '^(deb |URIs:|Suites:|Components:|Architectures:)' \
+            /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null || true
+
+            echo "=== Ubuntu mirror configuration ==="
+            cat /etc/apt/apt-mirrors.txt 2>/dev/null || true
             sudo apt-get install -y --no-install-recommends \
               libssl-dev:arm64 \
               pkg-config \
