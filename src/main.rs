@@ -1,12 +1,31 @@
-use std::env;
+use core::error;
 use std::path::Path;
+use std::{env, process::Command};
 
 use compatpy::{
-    compatible_python_versions, discover_dependencies, fetch_pypi_metadata, select_package_release,
+    compatible_python_versions, discover_dependencies, fetch_pypi_metadata, parse_args,
+    select_package_release,
 };
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+
+    match parse_args(&args) {
+        Ok(Command::Version) => {
+            println!(compatpy { VERSION });
+            return;
+        }
+        Ok(Command::Help) => {
+            println!("Usage: compatpy <project-directory>");
+            println!("       compatpy --help");
+            println!("       compatpy --version");
+            return;
+        }
+        Err(error) => {
+            eprintln!("Error: {error}");
+            std::process::exit(2);
+        }
+    }
 
     if args.len() != 2 {
         eprintln!("Usage: compatpy <project-directory>");
