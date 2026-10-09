@@ -118,11 +118,30 @@ jobs:
         run: |
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
             sudo dpkg --add-architecture arm64
-            # Update apt with fallback to ignore missing repositories
-            sudo apt-get update -o APT::Get::AllowUnauthenticated=true -o Acquire::Check::Date=false || sudo apt-get update -o Acquire::AllowInsecureRepositories=true -o Acquire::AllowDowngradeToInsecureRepositories=true || true
             
-            # Install the cross-compiler along with the ARM64 libssl package
-            sudo apt-get install -y --no-install-recommends libssl-dev:arm64 pkg-config gcc-aarch64-linux-gnu
+            # Retry apt-get update with multiple attempts
+            for attempt in {1..3}; do
+              echo "Attempt $attempt to update apt..."
+              if sudo apt-get update -o APT::Get::AllowUnauthenticated=true -o Acquire::Check::Date=false 2>&1 | grep -q "^Reading package lists"; then
+                echo "apt-get update succeeded"
+                break
+              fi
+              if [ $attempt -lt 3 ]; then
+                sleep 10
+              fi
+            done
+            
+            # Install with retry logic
+            for attempt in {1..3}; do
+              echo "Attempt $attempt to install packages..."
+              if sudo apt-get install -y --no-install-recommends libssl-dev:arm64 pkg-config gcc-aarch64-linux-gnu; then
+                echo "Installation succeeded"
+                break
+              fi
+              if [ $attempt -lt 3 ]; then
+                sleep 10
+              fi
+            done
             
             # Tell pkg-config to look for ARM64 libraries instead of system defaults
             echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
