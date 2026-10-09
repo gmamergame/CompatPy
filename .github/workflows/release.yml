@@ -118,8 +118,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libssl-dev pkg-config
-          # Add ARM64 cross-compilation support
-          sudo apt-get install -y libssl-dev:arm64 pkg-config-aarch64-linux-gnu
+          # For ARM64 cross-compilation
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev:arm64
 
       - name: Build and upload portable binary
         uses: taiki-e/upload-rust-binary-action@v1
