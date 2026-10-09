@@ -1,45 +1,44 @@
-use core::error;
+use std::env;
 use std::path::Path;
-use std::{env, process::Command};
+use std::process;
 
 use compatpy::{
-    compatible_python_versions, discover_dependencies, fetch_pypi_metadata, parse_args,
+    VERSION, compatible_python_versions, discover_dependencies, fetch_pypi_metadata,
     select_package_release,
 };
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
+    let args: Vec<String> = env::args().skip(1).collect();
 
-    match parse_args(&args) {
-        Ok(Command::Version) => {
-            println!(compatpy { VERSION });
-            return;
-        }
-        Ok(Command::Help) => {
-            println!("Usage: compatpy <project-directory>");
-            println!("       compatpy --help");
-            println!("       compatpy --version");
-            return;
-        }
-        Err(error) => {
-            eprintln!("Error: {error}");
-            std::process::exit(2);
+    if args.len() == 1 {
+        match args[0].as_str() {
+            "--version" | "-v" => {
+                println!("compatpy {VERSION}");
+                return;
+            }
+            "--help" | "-h" => {
+                println!("Usage: compatpy <project-directory>");
+                println!("       compatpy --help");
+                println!("       compatpy --version");
+                return;
+            }
+            _ => {}
         }
     }
 
-    if args.len() != 2 {
+    if args.len() != 1 {
         eprintln!("Usage: compatpy <project-directory>");
-        std::process::exit(1);
+        process::exit(1);
     }
 
-    let project_path = Path::new(&args[1]);
+    let project_path = Path::new(&args[0]);
 
     if !project_path.exists() || !project_path.is_dir() {
         eprintln!(
             "Error: '{}' is not a valid directory.",
             project_path.display()
         );
-        std::process::exit(1);
+        process::exit(1);
     }
 
     println!("Scanning");
@@ -103,7 +102,7 @@ fn main() {
         }
         Err(error) => {
             eprintln!("Error: {error}");
-            std::process::exit(1);
+            process::exit(1);
         }
     }
 }
