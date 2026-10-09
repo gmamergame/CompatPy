@@ -19,7 +19,7 @@ automatically.
 -   [x] Parse `==`, `!=`, `<`, `<=`, `>`, `>=`, `~=`, and wildcard
     specifiers.
 -   [x] Support requirements without version specifiers.
--   [/] Support comma-separated specifiers.
+-   [x] Support comma-separated specifiers.
 -   [x] Ignore blank lines and full-line comments.
 -   [ ] Handle inline comments without stripping valid URL fragments.
 -   [/] Handle whitespace and line-ending differences.
