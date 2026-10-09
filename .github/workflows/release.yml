@@ -286,9 +286,10 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
 
+
   publish-release:
     name: Publish GitHub Release
-    needs: publish-crate
+    needs: [upload-binaries, windows-msi]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -305,8 +306,8 @@ jobs:
 
           echo "Looking for release tagged $TAG in $REPOSITORY"
 
-          RELEASE_ID=$(gh api \
-            "repos/$REPOSITORY/releases" \
+          RELEASE_ID=$(gh api --paginate \
+            "repos/$REPOSITORY/releases?per_page=100" \
             --jq ".[] | select(.tag_name == \"$TAG\") | .id" \
             | head -n 1)
 
