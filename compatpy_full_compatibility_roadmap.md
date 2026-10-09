@@ -218,7 +218,7 @@ automatically.
 
 ### Resolution strategy
 
--   [/] Choose candidate releases using a documented strategy.
+-   [/] Choose candidate releases using a documented strategy, preferring the newest compatible release that satisfies all applicable constraints.
 -   [ ] Backtrack when a selected release creates a conflict.
 -   [/] Do not assume the newest release is always correct.
 -   [/] Define prerelease selection behavior.
