@@ -40,6 +40,7 @@ jobs:
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
 
             sudo dpkg --add-architecture arm64
+            
             sudo tee /etc/apt/sources.list.d/ubuntu-arm64-ports.list > /dev/null <<'EOF'
             deb [arch=arm64] https://ports.ubuntu.com/ubuntu-ports noble main universe restricted multiverse
             deb [arch=arm64] https://ports.ubuntu.com/ubuntu-ports noble-updates main universe restricted multiverse
