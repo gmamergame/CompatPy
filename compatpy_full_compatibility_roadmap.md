@@ -28,7 +28,7 @@ automatically.
 ### Requirement syntax
 
 -   [x] Parse extras, such as `requests[security]`.
--   [ ] Parse direct URL requirements.
+-   [x] Parse direct URL requirements.
 -   [ ] Handle Git/VCS references where supported.
 -   [ ] Handle local paths and editable installs where supported.
 -   [/] Recognize valid package-name punctuation.
