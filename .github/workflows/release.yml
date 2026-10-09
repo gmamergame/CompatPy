@@ -113,13 +113,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-        - name: Install OpenSSL (Linux)
-          if: runner.os == 'Linux'
-          run: |
-            sudo apt-get update
-            sudo apt-get install -y libssl-dev pkg-config
-            # Add ARM64 cross-compilation support
-            sudo apt-get install -y libssl-dev:arm64 pkg-config-aarch64-linux-gnu
+      - name: Install OpenSSL (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+          # Add ARM64 cross-compilation support
+          sudo apt-get install -y libssl-dev:arm64 pkg-config-aarch64-linux-gnu
 
       - name: Build and upload portable binary
         uses: taiki-e/upload-rust-binary-action@v1
