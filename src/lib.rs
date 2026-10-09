@@ -509,6 +509,7 @@ pub fn compatible_python_versions(releases: &[PackageRelease]) -> Vec<String> {
         "3.12".to_owned(),
         "3.13".to_owned(),
         "3.14".to_owned(),
+        "3.15".to_owned(),
     ];
 
     for release in releases {
