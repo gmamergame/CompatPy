@@ -1181,7 +1181,12 @@ dependencies = [
 
         assert_eq!(
             compatible,
-            vec!["3.12".to_owned(), "3.13".to_owned(), "3.14".to_owned(),]
+            vec![
+                "3.12".to_owned(),
+                "3.13".to_owned(),
+                "3.14".to_owned(),
+                "3.15".to_owned()
+            ]
         );
     }
 
@@ -1205,6 +1210,7 @@ dependencies = [
                 "3.12".to_owned(),
                 "3.13".to_owned(),
                 "3.14".to_owned(),
+                "3.15".to_owned(),
             ]
         );
     }
