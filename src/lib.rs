@@ -524,24 +524,39 @@ fn parse_package_version(version: &str) -> ParsedPackageVersion {
 }
 
 fn package_version_satisfies(version: &str, requirement: &str) -> bool {
+    if requirement.trim().is_empty() {
+        return false;
+    }
+
     requirement
         .split(',')
         .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .all(|part| satisfies_package_specifier(version, part))
+        .all(|part| !part.is_empty() && satisfies_package_specifier(version, part))
 }
 
 fn satisfies_package_specifier(version: &str, specifier: &str) -> bool {
     let operators = ["~=", ">=", "<=", "==", "!=", ">", "<"];
 
-    let (operator, required) = operators
-        .iter()
-        .find_map(|operator| {
-            specifier
-                .strip_prefix(operator)
-                .map(|required| (*operator, required.trim()))
-        })
-        .unwrap_or(("==", specifier.trim()));
+    let Some((operator, required)) = operators.iter().find_map(|operator| {
+        specifier
+            .strip_prefix(operator)
+            .map(|required| (*operator, required.trim()))
+    }) else {
+        return false;
+    };
+
+    if required.is_empty() {
+        return false;
+    }
+
+    if required.starts_with('<')
+        || required.starts_with('>')
+        || required.starts_with('=')
+        || required.starts_with('!')
+        || required.starts_with('~')
+    {
+        return false;
+    }
 
     if (operator == "==" || operator == "!=") && required.ends_with(".*") {
         let prefix = &required[..required.len() - 2];
@@ -1017,6 +1032,61 @@ dependencies = [
             Ordering::Greater
         );
         assert_eq!(compare_versions("1.0rc1", "1.0"), Ordering::Less);
+    }
+
+    #[test]
+    fn supports_basic_comparison_operators() {
+        use super::package_version_satisfies;
+
+        assert!(package_version_satisfies("2.0", "==2.0"));
+        assert!(!package_version_satisfies("2.1", "==2.0"));
+
+        assert!(package_version_satisfies("2.1", "!=2.0"));
+        assert!(!package_version_satisfies("2.0", "!=2.0"));
+
+        assert!(package_version_satisfies("1.9", "<2.0"));
+        assert!(!package_version_satisfies("2.0", "<2.0"));
+
+        assert!(package_version_satisfies("2.0", "<=2.0"));
+        assert!(!package_version_satisfies("2.1", "<=2.0"));
+
+        assert!(package_version_satisfies("2.1", ">2.0"));
+        assert!(!package_version_satisfies("2.0", ">2.0"));
+
+        assert!(package_version_satisfies("2.0", ">=2.0"));
+        assert!(!package_version_satisfies("1.9", ">=2.0"));
+    }
+
+    #[test]
+    fn supports_combined_version_specifiers() {
+        use super::package_version_satisfies;
+
+        assert!(package_version_satisfies("2.5.0", ">=2.0,<3.0"));
+        assert!(package_version_satisfies("2.5.0", ">=2.0,!=2.4.0,<3.0"));
+        assert!(!package_version_satisfies("3.0.0", ">=2.0,<3.0"));
+        assert!(!package_version_satisfies("2.4.0", ">=2.0,!=2.4.0,<3.0"));
+    }
+
+    #[test]
+    fn compatible_release_operator_respects_release_prefix() {
+        use super::package_version_satisfies;
+
+        assert!(package_version_satisfies("1.4.5", "~=1.4.5"));
+        assert!(package_version_satisfies("1.4.9", "~=1.4.5"));
+        assert!(!package_version_satisfies("1.5.0", "~=1.4.5"));
+
+        assert!(package_version_satisfies("1.9.0", "~=1.4"));
+        assert!(!package_version_satisfies("2.0.0", "~=1.4"));
+    }
+
+    #[test]
+    fn rejects_invalid_version_specifiers() {
+        use super::package_version_satisfies;
+
+        assert!(!package_version_satisfies("2.0.0", "=>2.0.0"));
+        assert!(!package_version_satisfies("2.0.0", "><2.0.0"));
+        assert!(!package_version_satisfies("2.0.0", ""));
+        assert!(!package_version_satisfies("2.0.0", "=="));
     }
 
     fn temporary_project() -> std::path::PathBuf {
