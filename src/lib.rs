@@ -35,6 +35,7 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Dependency {
     pub name: String,
+    pub extras: Vec<String>,
     pub specifier: Option<String>,
     pub marker: Option<String>,
     pub source: PathBuf,
@@ -306,6 +307,7 @@ fn add_requirement(requirement: &str, source: &Path, dependencies: &mut Vec<Depe
         "add_requirement: input {requirement:?} from '{}'",
         source.display()
     );
+
     let (requirement, marker) = requirement
         .split_once(';')
         .map_or((requirement, None), |(requirement, marker)| {
@@ -334,39 +336,80 @@ fn add_requirement(requirement: &str, source: &Path, dependencies: &mut Vec<Depe
         return;
     }
 
-    let mut specifier_part = requirement[name_end..].trim();
+    let mut remainder = requirement[name_end..].trim();
+    let mut extras = Vec::new();
 
-    // Skip extras such as `foo[bar,baz]`.
-    if specifier_part.starts_with('[') {
-        if let Some(end) = specifier_part.find(']') {
-            specifier_part = specifier_part[end + 1..].trim();
+    if remainder.starts_with('[') {
+        let Some(end) = remainder.find(']') else {
+            test_debug!("add_requirement: ignoring extras without closing bracket");
+            return;
+        };
+
+        let extras_text = &remainder[1..end];
+
+        if extras_text.trim().is_empty() {
+            test_debug!("add_requirement: ignoring empty extras");
+            return;
+        }
+
+        extras = extras_text
+            .split(',')
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .collect();
+
+        if extras.iter().any(|extra| {
+            extra.is_empty()
+                || !extra
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+        }) {
+            test_debug!("add_requirement: ignoring invalid extras");
+            return;
+        }
+
+        remainder = remainder[end + 1..].trim();
+
+        if !remainder.is_empty()
+            && !remainder.starts_with(">=")
+            && !remainder.starts_with("<=")
+            && !remainder.starts_with("==")
+            && !remainder.starts_with("!=")
+            && !remainder.starts_with("~=")
+            && !remainder.starts_with('>')
+            && !remainder.starts_with('<')
+            && !remainder.starts_with('=')
+            && !remainder.starts_with('!')
+            && !remainder.starts_with('~')
+            && !remainder.starts_with('^')
+        {
+            test_debug!("add_requirement: ignoring invalid text after extras");
+            return;
         }
     }
 
-    let specifier = (!specifier_part.is_empty()).then(|| specifier_part.to_owned());
-
+    let specifier = (!remainder.is_empty()).then(|| remainder.to_owned());
     let normalized_name = normalize_package_name(name);
 
     let dependency = Dependency {
         name: normalized_name,
+        extras,
         specifier,
         marker,
         source: source.to_path_buf(),
     };
 
     test_debug!("add_requirement: normalized dependency {dependency:#?}");
+
     if !dependencies.contains(&dependency) {
         dependencies.push(dependency);
     }
+
     test_debug!("add_requirement: dependency count={}", dependencies.len());
 }
 
 fn normalize_package_name(name: &str) -> String {
-    let normalized = name
-        .trim()
-        .to_ascii_lowercase()
-        .replace('_', "-")
-        .replace('.', "-");
+    let normalized = name.trim().to_ascii_lowercase().replace(['_', '.'], "-");
     test_debug!("normalize_package_name: {name:?} -> {normalized:?}");
     normalized
 }
@@ -665,12 +708,80 @@ fn satisfies_package_specifier(version: &str, specifier: &str) -> bool {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct ParsedRequirement {
+    pub name: String,
+    pub extras: Vec<String>,
+    pub specifier: String,
+}
+
+pub fn parse_requirement(input: &str) -> Result<ParsedRequirement, String> {
+    let input = input.trim();
+
+    if input.is_empty() {
+        return Err("Requirement cannot be empty".to_string());
+    }
+
+    let (name_and_extras, specifier) = match input.find(['<', '>', '=', '!', '~']) {
+        Some(index) => (&input[..index], input[index..].trim().to_string()),
+        None => (input, String::new()),
+    };
+
+    let (name, extras) = match name_and_extras.find('[') {
+        Some(start) => {
+            let end = name_and_extras
+                .strip_suffix(']')
+                .ok_or_else(|| "Extras must end with ']'".to_string())?;
+
+            let name = &name_and_extras[..start];
+
+            if end.len() <= start + 1 {
+                return Err("Extras cannot be empty".to_string());
+            }
+
+            let extras_text = &end[start + 1..];
+
+            let extras: Vec<String> = extras_text
+                .split(',')
+                .map(str::trim)
+                .map(str::to_ascii_lowercase)
+                .collect();
+
+            if extras.iter().any(|extra| {
+                extra.is_empty()
+                    || !extra
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+            }) {
+                return Err("Invalid extra name".to_string());
+            }
+
+            (name.to_string(), extras)
+        }
+        None => (name_and_extras.to_string(), Vec::new()),
+    };
+
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+    {
+        return Err("Invalid package name".to_string());
+    }
+
+    Ok(ParsedRequirement {
+        name: name.to_ascii_lowercase(),
+        extras,
+        specifier,
+    })
+}
+
 #[cfg(test)]
 mod tests {
 
     use super::{
-        Command, Dependency, discover_dependencies, normalize_package_name, parse_args,
-        select_package_release,
+        Command, Dependency, ParsedRequirement, discover_dependencies, normalize_package_name,
+        parse_args, parse_requirement, select_package_release,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -711,18 +822,21 @@ mod tests {
             vec![
                 Dependency {
                     name: "flask".to_owned(),
+                    extras: vec![],
                     specifier: Some("==3.0".to_owned()),
                     marker: None,
                     source: project.join("requirements.txt"),
                 },
                 Dependency {
                     name: "requests".to_owned(),
+                    extras: vec![],
                     specifier: Some(">=2.0".to_owned()),
                     marker: None,
                     source: project.join("requirements.txt"),
                 },
                 Dependency {
                     name: "requests".to_owned(),
+                    extras: vec![],
                     specifier: None,
                     marker: None,
                     source: project.join("requirements.txt"),
@@ -1288,6 +1402,184 @@ dependencies = [
             .unwrap();
 
         assert_eq!(requests.specifier.as_deref(), Some(">=2.0, <3.0"));
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn parses_requirement_without_extras() {
+        assert_eq!(
+            parse_requirement("requests").unwrap(),
+            ParsedRequirement {
+                name: "requests".to_string(),
+                extras: vec![],
+                specifier: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_requirement_with_one_extra() {
+        assert_eq!(
+            parse_requirement("requests[security]").unwrap(),
+            ParsedRequirement {
+                name: "requests".to_string(),
+                extras: vec!["security".to_string()],
+                specifier: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_requirement_with_multiple_extras() {
+        assert_eq!(
+            parse_requirement("requests[security,socks]").unwrap(),
+            ParsedRequirement {
+                name: "requests".to_string(),
+                extras: vec!["security".to_string(), "socks".to_string(),],
+                specifier: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_extras_with_version_specifier() {
+        assert_eq!(
+            parse_requirement("requests[security]>=2.31.0").unwrap(),
+            ParsedRequirement {
+                name: "requests".to_string(),
+                extras: vec!["security".to_string()],
+                specifier: ">=2.31.0".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_extras_with_whitespace() {
+        assert_eq!(
+            parse_requirement("requests[security, socks]").unwrap(),
+            ParsedRequirement {
+                name: "requests".to_string(),
+                extras: vec!["security".to_string(), "socks".to_string(),],
+                specifier: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_empty_extras() {
+        assert!(parse_requirement("requests[]").is_err());
+    }
+
+    #[test]
+    fn rejects_missing_closing_bracket() {
+        assert!(parse_requirement("requests[security").is_err());
+    }
+
+    #[test]
+    fn rejects_empty_extra_between_commas() {
+        assert!(parse_requirement("requests[security,,socks]").is_err());
+    }
+
+    #[test]
+    fn rejects_empty_requirement() {
+        assert!(parse_requirement("").is_err());
+    }
+
+    #[test]
+    fn discovers_requirement_with_one_extra() {
+        let project = temporary_project();
+        let requirements = project.join("requirements.txt");
+
+        fs::write(&requirements, "requests[security]\n").unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 1);
+        assert_eq!(dependencies[0].name, "requests");
+        assert_eq!(dependencies[0].extras, vec!["security"]);
+        assert_eq!(dependencies[0].specifier, None);
+        assert_eq!(dependencies[0].marker, None);
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn discovers_requirement_with_multiple_extras_and_specifier() {
+        let project = temporary_project();
+        let requirements = project.join("requirements.txt");
+
+        fs::write(&requirements, "requests[security,socks]>=2.31.0\n").unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 1);
+        assert_eq!(dependencies[0].name, "requests");
+        assert_eq!(dependencies[0].extras, vec!["security", "socks"]);
+        assert_eq!(dependencies[0].specifier.as_deref(), Some(">=2.31.0"));
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn discovers_requirement_with_extra_and_environment_marker() {
+        let project = temporary_project();
+        let requirements = project.join("requirements.txt");
+
+        fs::write(
+            &requirements,
+            "requests[security]>=2.31.0; python_version >= \"3.10\"\n",
+        )
+        .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 1);
+        assert_eq!(dependencies[0].name, "requests");
+        assert_eq!(dependencies[0].extras, vec!["security"]);
+        assert_eq!(dependencies[0].specifier.as_deref(), Some(">=2.31.0"));
+        assert_eq!(
+            dependencies[0].marker.as_deref(),
+            Some("python_version >= \"3.10\"")
+        );
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn keeps_dependencies_with_different_extras_distinct() {
+        let project = temporary_project();
+        let requirements = project.join("requirements.txt");
+
+        fs::write(&requirements, "requests[security]\nrequests[socks]\n").unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 2);
+        assert!(dependencies.iter().any(|dependency| {
+            dependency.name == "requests" && dependency.extras == vec!["security"]
+        }));
+        assert!(dependencies.iter().any(|dependency| {
+            dependency.name == "requests" && dependency.extras == vec!["socks"]
+        }));
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn ignores_malformed_extras() {
+        let project = temporary_project();
+        let requirements = project.join("requirements.txt");
+
+        fs::write(
+            &requirements,
+            "requests[]\nrequests[security\nrequests[security,,socks]\nrequests[security]junk\n",
+        )
+        .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert!(dependencies.is_empty());
 
         fs::remove_dir_all(project).unwrap();
     }
