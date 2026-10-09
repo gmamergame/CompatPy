@@ -223,22 +223,52 @@ fn strip_inline_comment(line: &str) -> &str {
 }
 
 fn discover_from_requirements(contents: &str, source: &Path, dependencies: &mut Vec<Dependency>) {
-    for line in contents.lines() {
-        let line = line.trim();
+    let mut logical_line = String::new();
 
-        if line.is_empty() || line.starts_with('#') || line.starts_with('-') {
+    for physical_line in contents.lines() {
+        let line = physical_line.trim();
+
+        // Skip blank lines and comments when not inside a continuation.
+        if logical_line.is_empty() && (line.is_empty() || line.starts_with('#')) {
             test_debug!("requirements: skipping line {line:?}");
             continue;
         }
 
-        let line = strip_inline_comment(line);
+        // A trailing backslash continues the requirement on the next line.
+        if let Some(without_backslash) = line.strip_suffix('\\') {
+            if !logical_line.is_empty() {
+                logical_line.push(' ');
+            }
 
-        if line.is_empty() {
+            logical_line.push_str(without_backslash.trim_end());
             continue;
         }
 
-        test_debug!("requirements: parsing line {line:?}");
-        add_requirement(line, source, dependencies);
+        if !logical_line.is_empty() {
+            logical_line.push(' ');
+        }
+
+        logical_line.push_str(line);
+
+        let requirement = strip_inline_comment(logical_line.trim()).trim();
+
+        if !requirement.is_empty() && !requirement.starts_with('-') {
+            test_debug!("requirements: parsing logical line {requirement:?}");
+            add_requirement(requirement, source, dependencies);
+        } else {
+            test_debug!("requirements: skipping logical line {requirement:?}");
+        }
+
+        logical_line.clear();
+    }
+
+    // Process any remaining content, even if the file ends with a backslash.
+    if !logical_line.trim().is_empty() {
+        let requirement = strip_inline_comment(logical_line.trim()).trim();
+
+        if !requirement.is_empty() && !requirement.starts_with('-') {
+            add_requirement(requirement, source, dependencies);
+        }
     }
 }
 
@@ -1190,6 +1220,74 @@ dependencies = [
                 .collect::<Vec<_>>(),
             vec!["flask", "requests", "uvicorn"]
         );
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn handles_backslash_line_continuations() {
+        let project = temporary_project();
+        let requirements = project.join("requirements.txt");
+
+        fs::write(&requirements, "requests>=2.0,\\\n    <3.0\nflask==3.0\n").unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 2);
+
+        let requests = dependencies
+            .iter()
+            .find(|dependency| dependency.name == "requests")
+            .unwrap();
+
+        assert_eq!(requests.specifier.as_deref(), Some(">=2.0, <3.0"));
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn handles_multiple_continuation_lines_and_crlf() {
+        let project = temporary_project();
+        let requirements = project.join("requirements.txt");
+
+        fs::write(
+            &requirements,
+            "requests>=2.0,\\\r\n    <3.0,\\\r\n    !=2.5.0\r\n",
+        )
+        .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 1);
+        assert_eq!(
+            dependencies[0].specifier.as_deref(),
+            Some(">=2.0, <3.0, !=2.5.0")
+        );
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn handles_comments_after_continuation_lines() {
+        let project = temporary_project();
+        let requirements = project.join("requirements.txt");
+
+        fs::write(
+            &requirements,
+            "# comment\nrequests>=2.0,\\\n    <3.0  # upper bound\n\nflask==3.0\n",
+        )
+        .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 2);
+
+        let requests = dependencies
+            .iter()
+            .find(|dependency| dependency.name == "requests")
+            .unwrap();
+
+        assert_eq!(requests.specifier.as_deref(), Some(">=2.0, <3.0"));
 
         fs::remove_dir_all(project).unwrap();
     }

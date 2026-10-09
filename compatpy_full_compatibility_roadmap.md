@@ -23,7 +23,7 @@ automatically.
 -   [x] Ignore blank lines and full-line comments.
 -   [x] Handle inline comments without stripping valid URL fragments.
 -   [x] Handle whitespace and line-ending differences.
--   [ ] Handle supported line continuations.
+-   [x] Handle supported line continuations.
 
 ### Requirement syntax
 
