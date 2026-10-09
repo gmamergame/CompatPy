@@ -161,24 +161,6 @@ Format the code:
 cargo fmt
 ```
 
-## Versioning
-
-CompatPy uses calendar versioning:
-
-```text
-YY.MM.PATCH
-```
-
-For example:
-
-```text
-26.10.0
-26.10.1
-26.11.0
-```
-
-Patch releases are used for additional releases within the same month. The patch number resets when a new month begins.
-
 ## Contributing
 
 Want to help improve CompatPy? Pick an item from the roadmap and help move it forward!
