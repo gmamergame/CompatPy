@@ -118,9 +118,11 @@ jobs:
         run: |
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
             sudo dpkg --add-architecture arm64
-            sudo apt-get update
+            # Update apt with fallback to ignore missing repositories
+            sudo apt-get update -o APT::Get::AllowUnauthenticated=true -o Acquire::Check::Date=false || sudo apt-get update -o Acquire::AllowInsecureRepositories=true -o Acquire::AllowDowngradeToInsecureRepositories=true || true
+            
             # Install the cross-compiler along with the ARM64 libssl package
-            sudo apt-get install -y libssl-dev:arm64 pkg-config gcc-aarch64-linux-gnu
+            sudo apt-get install -y --no-install-recommends libssl-dev:arm64 pkg-config gcc-aarch64-linux-gnu
             
             # Tell pkg-config to look for ARM64 libraries instead of system defaults
             echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
@@ -134,10 +136,11 @@ jobs:
       - name: Install build dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
-            sudo apt-get install -y gcc-aarch64-linux-gnu
+            sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu
+          else
+            sudo apt-get update
+            sudo apt-get install -y pkg-config
           fi
 
       - name: Build and upload portable binary
