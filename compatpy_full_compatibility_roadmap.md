@@ -22,7 +22,7 @@ automatically.
 -   [x] Support comma-separated specifiers.
 -   [x] Ignore blank lines and full-line comments.
 -   [x] Handle inline comments without stripping valid URL fragments.
--   [/] Handle whitespace and line-ending differences.
+-   [x] Handle whitespace and line-ending differences.
 -   [ ] Handle supported line continuations.
 
 ### Requirement syntax

@@ -1131,6 +1131,69 @@ dependencies = [
         );
     }
 
+    #[test]
+    fn handles_whitespace_in_requirements() {
+        let project = temporary_project();
+        let requirements = project.join("requirements.txt");
+
+        fs::write(
+            &requirements,
+            "  requests>=2.0  \n\tflask==3.0\t\n\n   # comment\n",
+        )
+        .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 2);
+        assert_eq!(dependencies[0].name, "flask");
+        assert_eq!(dependencies[0].specifier.as_deref(), Some("==3.0"));
+        assert_eq!(dependencies[1].name, "requests");
+        assert_eq!(dependencies[1].specifier.as_deref(), Some(">=2.0"));
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn handles_crlf_line_endings_equivalently_to_lf() {
+        let project = temporary_project();
+        let requirements = project.join("requirements.txt");
+
+        fs::write(&requirements, "requests>=2.0\nflask==3.0\n").unwrap();
+        let lf_dependencies = discover_dependencies(&project).unwrap();
+
+        fs::write(&requirements, "requests>=2.0\r\nflask==3.0\r\n").unwrap();
+        let crlf_dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(crlf_dependencies, lf_dependencies);
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn handles_mixed_line_endings() {
+        let project = temporary_project();
+        let requirements = project.join("requirements.txt");
+
+        fs::write(
+            &requirements,
+            "requests>=2.0\r\nflask==3.0\nuvicorn>=0.30\r\n",
+        )
+        .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 3);
+        assert_eq!(
+            dependencies
+                .iter()
+                .map(|dependency| dependency.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["flask", "requests", "uvicorn"]
+        );
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
     fn temporary_project() -> std::path::PathBuf {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
