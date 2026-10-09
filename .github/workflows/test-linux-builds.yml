@@ -63,7 +63,8 @@ jobs:
             sudo apt-get install -y --no-install-recommends \
               libssl-dev:arm64 \
               pkg-config \
-              gcc-aarch64-linux-gnu
+              gcc-aarch64-linux-gnu \
+              libc6-dev-arm64-cross
 
             echo "PKG_CONFIG_ALLOW_CROSS=1" >> "$GITHUB_ENV"
             echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> "$GITHUB_ENV"
