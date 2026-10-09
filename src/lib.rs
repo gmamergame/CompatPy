@@ -206,12 +206,34 @@ fn dependency_files(project_path: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(files)
 }
 
+fn strip_inline_comment(line: &str) -> &str {
+    for (index, character) in line.char_indices() {
+        if character == '#'
+            && index > 0
+            && line[..index]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_whitespace)
+        {
+            return line[..index].trim_end();
+        }
+    }
+
+    line
+}
+
 fn discover_from_requirements(contents: &str, source: &Path, dependencies: &mut Vec<Dependency>) {
     for line in contents.lines() {
         let line = line.trim();
 
         if line.is_empty() || line.starts_with('#') || line.starts_with('-') {
             test_debug!("requirements: skipping line {line:?}");
+            continue;
+        }
+
+        let line = strip_inline_comment(line);
+
+        if line.is_empty() {
             continue;
         }
 
@@ -1087,6 +1109,26 @@ dependencies = [
         assert!(!package_version_satisfies("2.0.0", "><2.0.0"));
         assert!(!package_version_satisfies("2.0.0", ""));
         assert!(!package_version_satisfies("2.0.0", "=="));
+    }
+
+    #[test]
+    fn strips_inline_requirement_comments() {
+        assert_eq!(
+            super::strip_inline_comment("requests>=2.0  # minimum version"),
+            "requests>=2.0"
+        );
+
+        assert_eq!(
+            super::strip_inline_comment("mypackage @ https://example.com/pkg.whl#sha256=abc123"),
+            "mypackage @ https://example.com/pkg.whl#sha256=abc123"
+        );
+
+        assert_eq!(
+            super::strip_inline_comment(
+                "mypackage @ https://example.com/pkg.whl#sha256=abc123  # comment"
+            ),
+            "mypackage @ https://example.com/pkg.whl#sha256=abc123"
+        );
     }
 
     fn temporary_project() -> std::path::PathBuf {
