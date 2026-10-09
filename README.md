@@ -181,9 +181,14 @@ Patch releases are used for additional releases within the same month. The patch
 
 ## Contributing
 
-Contributions are welcome.
+Want to help improve CompatPy? Pick an item from the roadmap and help move it forward!
 
-If you find a bug, have an idea, or want to improve CompatPy, open an issue or pull request on GitHub.
+Check the current implementation before starting work.
+For larger changes, open an issue to discuss the proposed approach first.
+Keep changes focused and include tests where appropriate.
+Update the roadmap when a feature is implemented and verified.
+
+Not every roadmap item is a commitment or a release blocker. Contributions, bug reports, tests, and suggestions are all welcome.
 
 ## License
 
