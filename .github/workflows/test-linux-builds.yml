@@ -1,0 +1,67 @@
+name: Test Linux Builds
+
+on:
+  push:
+    branches:
+      - test/linux-openssl-fix
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install OpenSSL and build dependencies
+        run: |
+          sudo apt-get update
+
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            sudo dpkg --add-architecture arm64
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends \
+              libssl-dev:arm64 \
+              pkg-config \
+              gcc-aarch64-linux-gnu
+
+            echo "PKG_CONFIG_ALLOW_CROSS=1" >> "$GITHUB_ENV"
+            echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> "$GITHUB_ENV"
+            echo "OPENSSL_DIR=/usr" >> "$GITHUB_ENV"
+            echo "OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu" >> "$GITHUB_ENV"
+            echo "OPENSSL_INCLUDE_DIR=/usr/include" >> "$GITHUB_ENV"
+          else
+            sudo apt-get install -y --no-install-recommends \
+              libssl-dev \
+              pkg-config
+          fi
+
+      - name: Diagnose OpenSSL
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          pkg-config --modversion openssl
+          pkg-config --cflags --libs openssl
+          test -f /usr/include/openssl/ssl.h
+
+      - name: Build
+        run: cargo build --release --bin compatpy --locked --target ${{ matrix.target }}
