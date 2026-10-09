@@ -299,10 +299,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           REPOSITORY: ${{ github.repository }}
+        shell: bash
         run: |
-          RELEASE_ID=$(gh api "repos/$REPOSITORY/releases/tags/$TAG" --jq .id)
+          set -euo pipefail
+
+          echo "Looking for release tagged $TAG in $REPOSITORY"
+
+          RELEASE_ID=$(gh api \
+            "repos/$REPOSITORY/releases" \
+            --jq ".[] | select(.tag_name == \"$TAG\") | .id" \
+            | head -n 1)
+
+          if [[ -z "$RELEASE_ID" ]]; then
+            echo "No GitHub release found for tag $TAG."
+            echo "Available releases:"
+            gh release list --repo "$REPOSITORY" || true
+            exit 1
+          fi
+
+          echo "Publishing release ID $RELEASE_ID"
 
           gh api \
             --method PATCH \
             "repos/$REPOSITORY/releases/$RELEASE_ID" \
             -F draft=false
+
+          echo "Release $TAG is now published."
