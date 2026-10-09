@@ -37,6 +37,7 @@ pub struct Dependency {
     pub name: String,
     pub extras: Vec<String>,
     pub specifier: Option<String>,
+    pub url: Option<String>,
     pub marker: Option<String>,
     pub source: PathBuf,
 }
@@ -316,43 +317,43 @@ fn add_requirement(requirement: &str, source: &Path, dependencies: &mut Vec<Depe
 
     let requirement = requirement.trim();
 
-    let name_end = requirement
-        .find(|character: char| {
-            character == '['
-                || character == '<'
-                || character == '>'
-                || character == '='
-                || character == '!'
-                || character == '~'
-                || character == '^'
-                || character.is_whitespace()
-        })
-        .unwrap_or(requirement.len());
+    let (name_and_extras, url) = match requirement.split_once('@') {
+        Some((name, url)) => {
+            let url = url.trim();
 
-    let name = requirement[..name_end].trim();
+            if !(url.starts_with("https://")
+                || url.starts_with("http://")
+                || url.starts_with("file://")
+                || url.starts_with("git+https://")
+                || url.starts_with("git+http://")
+                || url.starts_with("git+ssh://")
+                || url.starts_with("git+file://"))
+            {
+                test_debug!("add_requirement: ignoring unsupported or invalid direct URL");
+                return;
+            }
 
-    if name.is_empty() {
-        test_debug!("add_requirement: ignoring empty package name");
-        return;
-    }
+            (name.trim(), Some(url.to_owned()))
+        }
+        None => (requirement, None),
+    };
 
-    let mut remainder = requirement[name_end..].trim();
-    let mut extras = Vec::new();
-
-    if remainder.starts_with('[') {
-        let Some(end) = remainder.find(']') else {
+    let (name, extras, specifier) = if let Some(start) = name_and_extras.find('[') {
+        let Some(end) = name_and_extras.find(']') else {
             test_debug!("add_requirement: ignoring extras without closing bracket");
             return;
         };
 
-        let extras_text = &remainder[1..end];
+        let name = name_and_extras[..start].trim();
+        let extras_text = &name_and_extras[start + 1..end];
+        let remainder = name_and_extras[end + 1..].trim();
 
         if extras_text.trim().is_empty() {
             test_debug!("add_requirement: ignoring empty extras");
             return;
         }
 
-        extras = extras_text
+        let extras: Vec<String> = extras_text
             .split(',')
             .map(str::trim)
             .map(str::to_ascii_lowercase)
@@ -362,39 +363,76 @@ fn add_requirement(requirement: &str, source: &Path, dependencies: &mut Vec<Depe
             extra.is_empty()
                 || !extra
                     .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+                    .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
         }) {
             test_debug!("add_requirement: ignoring invalid extras");
             return;
         }
 
-        remainder = remainder[end + 1..].trim();
-
         if !remainder.is_empty()
-            && !remainder.starts_with(">=")
-            && !remainder.starts_with("<=")
-            && !remainder.starts_with("==")
-            && !remainder.starts_with("!=")
-            && !remainder.starts_with("~=")
-            && !remainder.starts_with('>')
-            && !remainder.starts_with('<')
-            && !remainder.starts_with('=')
-            && !remainder.starts_with('!')
-            && !remainder.starts_with('~')
-            && !remainder.starts_with('^')
+            && ![">=", "<=", "==", "!=", "~=", ">", "<", "=", "!", "~", "^"]
+                .iter()
+                .any(|operator| remainder.starts_with(operator))
         {
             test_debug!("add_requirement: ignoring invalid text after extras");
             return;
         }
+
+        let specifier = if url.is_none() {
+            (!remainder.is_empty()).then(|| remainder.to_owned())
+        } else {
+            if !remainder.is_empty() {
+                test_debug!("add_requirement: ignoring specifier after direct URL");
+                return;
+            }
+            None
+        };
+
+        (name, extras, specifier)
+    } else {
+        let name_end = name_and_extras
+            .find(['<', '>', '=', '!', '~', '^'])
+            .unwrap_or(name_and_extras.len());
+
+        let name = name_and_extras[..name_end].trim();
+        let remainder = name_and_extras[name_end..].trim();
+
+        if !remainder.is_empty()
+            && ![">=", "<=", "==", "!=", "~=", ">", "<", "=", "!", "~", "^"]
+                .iter()
+                .any(|operator| remainder.starts_with(operator))
+        {
+            test_debug!("add_requirement: ignoring invalid specifier");
+            return;
+        }
+
+        let specifier = if url.is_none() {
+            (!remainder.is_empty()).then(|| remainder.to_owned())
+        } else {
+            if !remainder.is_empty() {
+                test_debug!("add_requirement: ignoring specifier after direct URL");
+                return;
+            }
+            None
+        };
+
+        (name, Vec::new(), specifier)
+    };
+
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
+    {
+        test_debug!("add_requirement: ignoring invalid package name");
+        return;
     }
 
-    let specifier = (!remainder.is_empty()).then(|| remainder.to_owned());
-    let normalized_name = normalize_package_name(name);
-
     let dependency = Dependency {
-        name: normalized_name,
+        name: normalize_package_name(name),
         extras,
         specifier,
+        url,
         marker,
         source: source.to_path_buf(),
     };
@@ -404,8 +442,6 @@ fn add_requirement(requirement: &str, source: &Path, dependencies: &mut Vec<Depe
     if !dependencies.contains(&dependency) {
         dependencies.push(dependency);
     }
-
-    test_debug!("add_requirement: dependency count={}", dependencies.len());
 }
 
 fn normalize_package_name(name: &str) -> String {
@@ -713,6 +749,7 @@ pub struct ParsedRequirement {
     pub name: String,
     pub extras: Vec<String>,
     pub specifier: String,
+    pub url: Option<String>,
 }
 
 pub fn parse_requirement(input: &str) -> Result<ParsedRequirement, String> {
@@ -722,9 +759,31 @@ pub fn parse_requirement(input: &str) -> Result<ParsedRequirement, String> {
         return Err("Requirement cannot be empty".to_string());
     }
 
-    let (name_and_extras, specifier) = match input.find(['<', '>', '=', '!', '~']) {
-        Some(index) => (&input[..index], input[index..].trim().to_string()),
-        None => (input, String::new()),
+    let (name_and_extras, specifier, url) = match input.split_once('@') {
+        Some((name, url)) => {
+            let url = url.trim();
+
+            if !(url.starts_with("https://")
+                || url.starts_with("http://")
+                || url.starts_with("file://")
+                || url.starts_with("git+https://")
+                || url.starts_with("git+http://")
+                || url.starts_with("git+ssh://")
+                || url.starts_with("git+file://"))
+            {
+                return Err("Invalid direct URL".to_string());
+            }
+
+            (name.trim(), String::new(), Some(url.to_owned()))
+        }
+        None => {
+            let (name, specifier) = match input.find(['<', '>', '=', '!', '~']) {
+                Some(index) => (&input[..index], input[index..].trim().to_string()),
+                None => (input, String::new()),
+            };
+
+            (name, specifier, None)
+        }
     };
 
     let (name, extras) = match name_and_extras.find('[') {
@@ -749,9 +808,9 @@ pub fn parse_requirement(input: &str) -> Result<ParsedRequirement, String> {
 
             if extras.iter().any(|extra| {
                 extra.is_empty()
-                    || !extra
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+                    || !extra.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || "._-".contains(character)
+                    })
             }) {
                 return Err("Invalid extra name".to_string());
             }
@@ -764,7 +823,7 @@ pub fn parse_requirement(input: &str) -> Result<ParsedRequirement, String> {
     if name.is_empty()
         || !name
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+            .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
     {
         return Err("Invalid package name".to_string());
     }
@@ -773,6 +832,7 @@ pub fn parse_requirement(input: &str) -> Result<ParsedRequirement, String> {
         name: name.to_ascii_lowercase(),
         extras,
         specifier,
+        url,
     })
 }
 
@@ -824,6 +884,7 @@ mod tests {
                     name: "flask".to_owned(),
                     extras: vec![],
                     specifier: Some("==3.0".to_owned()),
+                    url: None,
                     marker: None,
                     source: project.join("requirements.txt"),
                 },
@@ -831,6 +892,7 @@ mod tests {
                     name: "requests".to_owned(),
                     extras: vec![],
                     specifier: Some(">=2.0".to_owned()),
+                    url: None,
                     marker: None,
                     source: project.join("requirements.txt"),
                 },
@@ -838,6 +900,7 @@ mod tests {
                     name: "requests".to_owned(),
                     extras: vec![],
                     specifier: None,
+                    url: None,
                     marker: None,
                     source: project.join("requirements.txt"),
                 },
@@ -1414,6 +1477,7 @@ dependencies = [
                 name: "requests".to_string(),
                 extras: vec![],
                 specifier: String::new(),
+                url: None,
             }
         );
     }
@@ -1426,6 +1490,7 @@ dependencies = [
                 name: "requests".to_string(),
                 extras: vec!["security".to_string()],
                 specifier: String::new(),
+                url: None,
             }
         );
     }
@@ -1438,6 +1503,7 @@ dependencies = [
                 name: "requests".to_string(),
                 extras: vec!["security".to_string(), "socks".to_string(),],
                 specifier: String::new(),
+                url: None,
             }
         );
     }
@@ -1450,6 +1516,7 @@ dependencies = [
                 name: "requests".to_string(),
                 extras: vec!["security".to_string()],
                 specifier: ">=2.31.0".to_string(),
+                url: None,
             }
         );
     }
@@ -1462,6 +1529,7 @@ dependencies = [
                 name: "requests".to_string(),
                 extras: vec!["security".to_string(), "socks".to_string(),],
                 specifier: String::new(),
+                url: None,
             }
         );
     }
@@ -1580,6 +1648,67 @@ dependencies = [
         let dependencies = discover_dependencies(&project).unwrap();
 
         assert!(dependencies.is_empty());
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn parses_requirement_with_direct_url() {
+        assert_eq!(
+            parse_requirement("mypackage @ https://example.com/pkg.whl#sha256=abc123").unwrap(),
+            ParsedRequirement {
+                name: "mypackage".to_owned(),
+                extras: vec![],
+                specifier: String::new(),
+                url: Some("https://example.com/pkg.whl#sha256=abc123".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_requirement_with_extras_and_direct_url() {
+        assert_eq!(
+            parse_requirement("mypackage[security,socks] @ git+https://example.com/repo.git")
+                .unwrap(),
+            ParsedRequirement {
+                name: "mypackage".to_owned(),
+                extras: vec!["security".to_owned(), "socks".to_owned()],
+                specifier: String::new(),
+                url: Some("git+https://example.com/repo.git".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_requirement_with_invalid_direct_url() {
+        assert!(parse_requirement("mypackage @ not-a-url").is_err());
+    }
+
+    #[test]
+    fn discovers_requirement_with_direct_url_and_marker() {
+        let project = temporary_project();
+        let requirements = project.join("requirements.txt");
+
+        fs::write(
+        &requirements,
+        "mypackage[security] @ https://example.com/pkg.whl#sha256=abc123; python_version >= \"3.10\"\n",
+    )
+    .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 1);
+        assert_eq!(dependencies[0].name, "mypackage");
+        assert_eq!(dependencies[0].extras, vec!["security"]);
+        assert_eq!(
+            dependencies[0].url.as_deref(),
+            Some("https://example.com/pkg.whl#sha256=abc123")
+        );
+        assert_eq!(dependencies[0].specifier, None);
+        assert_eq!(
+            dependencies[0].marker.as_deref(),
+            Some("python_version >= \"3.10\"")
+        );
 
         fs::remove_dir_all(project).unwrap();
     }
