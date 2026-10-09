@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -436,6 +437,7 @@ fn is_prerelease(version: &str) -> bool {
 struct ParsedPackageVersion {
     release: Vec<u64>,
     prerelease: Option<Prerelease>,
+    postrelease: Option<u64>,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -450,17 +452,22 @@ fn compare_versions(left: &str, right: &str) -> std::cmp::Ordering {
     let right_version = parse_package_version(right);
 
     match left_version.release.cmp(&right_version.release) {
-        std::cmp::Ordering::Equal => match (&left_version.prerelease, &right_version.prerelease) {
-            (None, None) => std::cmp::Ordering::Equal,
+        std::cmp::Ordering::Equal => {
+            match (&left_version.prerelease, &right_version.prerelease) {
+                (None, None) => {}
+                (None, Some(_)) => return std::cmp::Ordering::Greater,
+                (Some(_), None) => return std::cmp::Ordering::Less,
+                (Some(left), Some(right)) => {
+                    let ordering = left.cmp(right);
 
-            //stable releases are newer than prereleases.
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (Some(_), None) => std::cmp::Ordering::Less,
+                    if ordering != std::cmp::Ordering::Equal {
+                        return ordering;
+                    }
+                }
+            }
 
-            //both are  prereleases, so compare their actual prerelease versions.
-            (Some(left), Some(right)) => left.cmp(right),
-        },
-
+            left_version.postrelease.cmp(&right_version.postrelease)
+        }
         ordering => ordering,
     }
 }
@@ -468,29 +475,37 @@ fn compare_versions(left: &str, right: &str) -> std::cmp::Ordering {
 fn parse_package_version(version: &str) -> ParsedPackageVersion {
     let version = version.trim().to_ascii_lowercase();
 
-    let (release_part, prerelease) = if let Some(index) = version.find("rc") {
+    let (base_version, postrelease) = if let Some(index) = version.find(".post") {
+        let post_number = version[index + 5..].parse::<u64>().unwrap_or(0);
+
+        (&version[..index], Some(post_number))
+    } else {
+        (version.as_str(), None)
+    };
+
+    let (release_part, prerelease) = if let Some(index) = base_version.find("rc") {
         (
-            &version[..index],
+            &base_version[..index],
             Some(Prerelease::Rc(
-                version[index + 2..].parse::<u64>().unwrap_or(0),
+                base_version[index + 2..].parse::<u64>().unwrap_or(0),
             )),
         )
-    } else if let Some(index) = version.find('a') {
+    } else if let Some(index) = base_version.find('a') {
         (
-            &version[..index],
+            &base_version[..index],
             Some(Prerelease::Alpha(
-                version[index + 1..].parse::<u64>().unwrap_or(0),
+                base_version[index + 1..].parse::<u64>().unwrap_or(0),
             )),
         )
-    } else if let Some(index) = version.find('b') {
+    } else if let Some(index) = base_version.find('b') {
         (
-            &version[..index],
+            &base_version[..index],
             Some(Prerelease::Beta(
-                version[index + 1..].parse::<u64>().unwrap_or(0),
+                base_version[index + 1..].parse::<u64>().unwrap_or(0),
             )),
         )
     } else {
-        (version.as_str(), None)
+        (base_version, None)
     };
 
     let mut release = release_part
@@ -505,6 +520,7 @@ fn parse_package_version(version: &str) -> ParsedPackageVersion {
     ParsedPackageVersion {
         release,
         prerelease,
+        postrelease,
     }
 }
 
@@ -988,6 +1004,20 @@ dependencies = [
         assert!(!package_version_satisfies("3.12", "!=3.12.*"));
         assert!(package_version_satisfies("3.13.0", "!=3.12.*"));
         assert!(package_version_satisfies("3.120.0", "!=3.12.*"));
+    }
+
+    #[test]
+    fn post_releases_are_ordered_correctly() {
+        use super::compare_versions;
+        use std::cmp::Ordering;
+
+        assert_eq!(compare_versions("1.0", "1.0.post1"), Ordering::Less);
+        assert_eq!(compare_versions("1.0.post1", "1.0.post2"), Ordering::Less);
+        assert_eq!(
+            compare_versions("1.0.post2", "1.0.post1"),
+            Ordering::Greater
+        );
+        assert_eq!(compare_versions("1.0rc1", "1.0"), Ordering::Less);
     }
 
     fn temporary_project() -> std::path::PathBuf {
