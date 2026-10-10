@@ -2379,10 +2379,7 @@ dependencies = [
 
         let environment = test_marker_environment("3.12", "linux");
 
-        assert_eq!(
-            dependency_applies_to_environment(&dependency, &environment).unwrap(),
-            true
-        );
+        assert!(dependency_applies_to_environment(&dependency, &environment).unwrap());
     }
 
     #[test]
@@ -2398,10 +2395,7 @@ dependencies = [
 
         let environment = test_marker_environment("3.9", "linux");
 
-        assert_eq!(
-            dependency_applies_to_environment(&dependency, &environment).unwrap(),
-            false
-        );
+        assert!(!dependency_applies_to_environment(&dependency, &environment).unwrap());
     }
 
     #[test]
