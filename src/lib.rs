@@ -224,6 +224,48 @@ fn strip_inline_comment(line: &str) -> &str {
     line
 }
 
+fn normalize_editable_requirement(requirement: &str) -> Option<String> {
+    let (_, fragment) = requirement.split_once('#')?;
+
+    let egg = fragment
+        .split('&')
+        .find_map(|part| part.strip_prefix("egg="))?;
+
+    let (package, extras) = match egg.split_once('[') {
+        Some((package, extras)) => {
+            let extras = extras.strip_suffix(']')?;
+            (package, Some(extras))
+        }
+        None => (egg, None),
+    };
+
+    let package = package.trim();
+
+    if package.is_empty()
+        || !package
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
+    {
+        return None;
+    }
+
+    let extras = match extras {
+        Some(extras) if !extras.trim().is_empty() => format!("[{}]", extras.trim()),
+        Some(_) => return None,
+        None => String::new(),
+    };
+
+    Some(format!("{package}{extras} @ {requirement}"))
+}
+
+fn parse_editable_requirement(line: &str) -> Option<String> {
+    line.strip_prefix("--editable ")
+        .or_else(|| line.strip_prefix("-e "))
+        .map(str::trim)
+        .filter(|requirement| !requirement.is_empty())
+        .map(str::to_owned)
+}
+
 fn discover_from_requirements(contents: &str, source: &Path, dependencies: &mut Vec<Dependency>) {
     let mut logical_line = String::new();
 
@@ -254,11 +296,23 @@ fn discover_from_requirements(contents: &str, source: &Path, dependencies: &mut 
 
         let requirement = strip_inline_comment(logical_line.trim()).trim();
 
-        if !requirement.is_empty() && !requirement.starts_with('-') {
+        if requirement.is_empty() {
+            test_debug!("requirements: skipping empty logical line");
+        } else if let Some(editable) = parse_editable_requirement(requirement) {
+            test_debug!("requirements: parsing editable requirement {editable:?}");
+
+            if let Some(normalized) = normalize_editable_requirement(&editable) {
+                add_requirement(&normalized, source, dependencies);
+            } else {
+                test_debug!(
+                    "requirements: skipping editable requirement without a valid egg fragment"
+                );
+            }
+        } else if !requirement.starts_with('-') {
             test_debug!("requirements: parsing logical line {requirement:?}");
             add_requirement(requirement, source, dependencies);
         } else {
-            test_debug!("requirements: skipping logical line {requirement:?}");
+            test_debug!("requirements: skipping unsupported option {requirement:?}");
         }
 
         logical_line.clear();
@@ -268,8 +322,12 @@ fn discover_from_requirements(contents: &str, source: &Path, dependencies: &mut 
     if !logical_line.trim().is_empty() {
         let requirement = strip_inline_comment(logical_line.trim()).trim();
 
-        if !requirement.is_empty() && !requirement.starts_with('-') {
-            add_requirement(requirement, source, dependencies);
+        if !requirement.is_empty() {
+            if let Some(editable) = parse_editable_requirement(requirement) {
+                add_requirement(&editable, source, dependencies);
+            } else if !requirement.starts_with('-') {
+                add_requirement(requirement, source, dependencies);
+            }
         }
     }
 }
@@ -1735,6 +1793,165 @@ dependencies = [
         assert_eq!(
             dependencies[0].marker.as_deref(),
             Some("python_version >= \"3.10\"")
+        );
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn parses_vcs_reference_with_subdirectory_fragment() {
+        let input =
+            "mypackage @ git+https://github.com/example/repo.git@main#subdirectory=python_pkg";
+
+        let parsed = parse_requirement(input).unwrap();
+
+        assert_eq!(parsed.name, "mypackage");
+        assert_eq!(
+            parsed.url.as_deref(),
+            Some("git+https://github.com/example/repo.git@main#subdirectory=python_pkg")
+        );
+        assert!(parsed.specifier.is_empty());
+    }
+
+    #[test]
+    fn preserves_vcs_reference_with_revision_and_egg_fragment() {
+        let input = "mypackage @ git+https://github.com/example/repo.git@v1.2.3#egg=mypackage";
+
+        let parsed = parse_requirement(input).unwrap();
+
+        assert_eq!(parsed.name, "mypackage");
+        assert_eq!(
+            parsed.url.as_deref(),
+            Some("git+https://github.com/example/repo.git@v1.2.3#egg=mypackage")
+        );
+        assert!(parsed.specifier.is_empty());
+    }
+
+    #[test]
+    fn preserves_encoded_subdirectory_fragment() {
+        let input = "mypackage @ git+https://github.com/example/repo.git@main#subdirectory=packages%2Fpython_pkg";
+
+        let parsed = parse_requirement(input).unwrap();
+
+        assert_eq!(
+            parsed.url.as_deref(),
+            Some("git+https://github.com/example/repo.git@main#subdirectory=packages%2Fpython_pkg")
+        );
+    }
+
+    #[test]
+    fn discovers_vcs_reference_with_subdirectory_fragment() {
+        let project = temporary_project();
+        let requirements = project.join("requirements.txt");
+
+        fs::write(
+            &requirements,
+            "mypackage @ git+https://github.com/example/repo.git@main#subdirectory=python_pkg\n",
+        )
+        .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 1);
+        assert_eq!(dependencies[0].name, "mypackage");
+        assert_eq!(
+            dependencies[0].url.as_deref(),
+            Some("git+https://github.com/example/repo.git@main#subdirectory=python_pkg")
+        );
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn discovers_editable_git_requirement() {
+        let project = temporary_project();
+        let requirements = project.join("requirements.txt");
+
+        fs::write(
+            &requirements,
+            "-e git+https://github.com/example/repo.git@main#egg=mypackage\n",
+        )
+        .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 1);
+        assert_eq!(dependencies[0].name, "mypackage");
+        assert_eq!(
+            dependencies[0].url.as_deref(),
+            Some("git+https://github.com/example/repo.git@main#egg=mypackage")
+        );
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn discovers_long_form_editable_git_requirement() {
+        let project = temporary_project();
+        let requirements = project.join("requirements.txt");
+
+        fs::write(
+            &requirements,
+            "--editable git+https://github.com/example/repo.git@main#egg=mypackage\n",
+        )
+        .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 1);
+        assert_eq!(dependencies[0].name, "mypackage");
+        assert_eq!(
+            dependencies[0].url.as_deref(),
+            Some("git+https://github.com/example/repo.git@main#egg=mypackage")
+        );
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn discovers_editable_git_requirement_with_extras() {
+        let project = temporary_project();
+        let requirements = project.join("requirements.txt");
+
+        fs::write(
+            &requirements,
+            "-e git+https://github.com/example/repo.git@main#egg=mypackage[security]\n",
+        )
+        .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 1);
+        assert_eq!(dependencies[0].name, "mypackage");
+        assert_eq!(dependencies[0].extras, vec!["security"]);
+        assert_eq!(
+            dependencies[0].url.as_deref(),
+            Some("git+https://github.com/example/repo.git@main#egg=mypackage[security]")
+        );
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn discovers_editable_git_requirement_with_subdirectory() {
+        let project = temporary_project();
+        let requirements = project.join("requirements.txt");
+
+        fs::write(
+        &requirements,
+        "-e git+https://github.com/example/repo.git@main#egg=mypackage&subdirectory=python_pkg\n",
+    )
+    .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 1);
+        assert_eq!(dependencies[0].name, "mypackage");
+        assert_eq!(
+            dependencies[0].url.as_deref(),
+            Some(
+                "git+https://github.com/example/repo.git@main#egg=mypackage&subdirectory=python_pkg"
+            )
         );
 
         fs::remove_dir_all(project).unwrap();
