@@ -303,6 +303,32 @@ fn discover_from_pyproject(
     Ok(())
 }
 
+fn is_supported_direct_url(url: &str) -> bool {
+    [
+        "https://",
+        "http://",
+        "file://",
+        "git+https://",
+        "git+http://",
+        "git+ssh://",
+        "git+file://",
+        "hg+https://",
+        "hg+http://",
+        "hg+ssh://",
+        "hg+file://",
+        "svn+https://",
+        "svn+http://",
+        "svn+ssh://",
+        "svn+file://",
+        "bzr+https://",
+        "bzr+http://",
+        "bzr+ssh://",
+        "bzr+file://",
+    ]
+    .iter()
+    .any(|prefix| url.starts_with(prefix))
+}
+
 fn add_requirement(requirement: &str, source: &Path, dependencies: &mut Vec<Dependency>) {
     test_debug!(
         "add_requirement: input {requirement:?} from '{}'",
@@ -321,20 +347,14 @@ fn add_requirement(requirement: &str, source: &Path, dependencies: &mut Vec<Depe
         Some((name, url)) => {
             let url = url.trim();
 
-            if !(url.starts_with("https://")
-                || url.starts_with("http://")
-                || url.starts_with("file://")
-                || url.starts_with("git+https://")
-                || url.starts_with("git+http://")
-                || url.starts_with("git+ssh://")
-                || url.starts_with("git+file://"))
-            {
+            if !is_supported_direct_url(url) {
                 test_debug!("add_requirement: ignoring unsupported or invalid direct URL");
                 return;
             }
 
             (name.trim(), Some(url.to_owned()))
         }
+
         None => (requirement, None),
     };
 

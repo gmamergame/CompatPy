@@ -29,7 +29,7 @@ automatically.
 
 -   [x] Parse extras, such as `requests[security]`.
 -   [x] Parse direct URL requirements.
--   [ ] Handle Git/VCS references where supported.
+-   [/] Handle Git/VCS references where supported.
 -   [ ] Handle local paths and editable installs where supported.
 -   [/] Recognize valid package-name punctuation.
 -   [ ] Support standard PEP 508 requirement syntax.
