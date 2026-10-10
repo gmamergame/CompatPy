@@ -1976,6 +1976,190 @@ dependencies = [
         fs::remove_dir_all(project).unwrap();
     }
 
+    #[test]
+    fn discovers_mercurial_vcs_reference() {
+        let project = temporary_project();
+        fs::write(
+            project.join("requirements.txt"),
+            "mypackage @ hg+https://example.com/repo\n",
+        )
+        .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 1);
+        assert_eq!(dependencies[0].name, "mypackage");
+        assert_eq!(
+            dependencies[0].url.as_deref(),
+            Some("hg+https://example.com/repo")
+        );
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn discovers_subversion_vcs_reference() {
+        let project = temporary_project();
+        fs::write(
+            project.join("requirements.txt"),
+            "mypackage @ svn+https://example.com/repo\n",
+        )
+        .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 1);
+        assert_eq!(dependencies[0].name, "mypackage");
+        assert_eq!(
+            dependencies[0].url.as_deref(),
+            Some("svn+https://example.com/repo")
+        );
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn discovers_bazaar_vcs_reference() {
+        let project = temporary_project();
+        fs::write(
+            project.join("requirements.txt"),
+            "mypackage @ bzr+https://example.com/repo\n",
+        )
+        .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 1);
+        assert_eq!(dependencies[0].name, "mypackage");
+        assert_eq!(
+            dependencies[0].url.as_deref(),
+            Some("bzr+https://example.com/repo")
+        );
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn discovers_git_references_with_different_revision_formats() {
+        let project = temporary_project();
+        fs::write(
+            project.join("requirements.txt"),
+            concat!(
+                "branchpkg @ git+https://example.com/branch.git@main\n",
+                "tagpkg @ git+https://example.com/tag.git@v1.2.3\n",
+                "commitpkg @ git+https://example.com/commit.git@0123456789abcdef\n",
+            ),
+        )
+        .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 3);
+        assert!(dependencies.iter().any(|d| d.name == "branchpkg"));
+        assert!(dependencies.iter().any(|d| d.name == "tagpkg"));
+        assert!(dependencies.iter().any(|d| d.name == "commitpkg"));
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn discovers_editable_git_requirement_with_reordered_fragments() {
+        let project = temporary_project();
+        fs::write(
+            project.join("requirements.txt"),
+            "-e git+https://example.com/repo.git#subdirectory=python_pkg&egg=mypackage\n",
+        )
+        .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 1);
+        assert_eq!(dependencies[0].name, "mypackage");
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn skips_editable_git_requirement_with_malformed_egg_extras() {
+        let project = temporary_project();
+        fs::write(
+            project.join("requirements.txt"),
+            "-e git+https://example.com/repo.git#egg=mypackage[security\n",
+        )
+        .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert!(dependencies.is_empty());
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn skips_editable_local_path_without_package_metadata_support() {
+        let project = temporary_project();
+        fs::write(project.join("requirements.txt"), "-e .\n-e ./my_package\n").unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        // Documents current behavior: local editable paths aren't
+        // normalized into named dependencies by the current helper.
+        assert!(dependencies.is_empty());
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn discovers_requirements_with_line_continuation() {
+        let project = temporary_project();
+        fs::write(
+            project.join("requirements.txt"),
+            "mypackage>=1.0,\\\n<2.0\n",
+        )
+        .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 1);
+        assert_eq!(dependencies[0].name, "mypackage");
+        assert_eq!(dependencies[0].specifier.as_deref(), Some(">=1.0, <2.0"));
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn skips_unsupported_requirements_file_options() {
+        let project = temporary_project();
+        fs::write(
+            project.join("requirements.txt"),
+            "--index-url https://packages.example.com/simple\n",
+        )
+        .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert!(dependencies.is_empty());
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn editable_requirement_without_trailing_newline_is_handled() {
+        let project = temporary_project();
+        fs::write(
+            project.join("requirements.txt"),
+            "-e git+https://example.com/repo.git@main#egg=mypackage",
+        )
+        .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 1);
+        assert_eq!(dependencies[0].name, "mypackage");
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
     fn temporary_project() -> std::path::PathBuf {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
