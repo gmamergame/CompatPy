@@ -989,6 +989,25 @@ mod tests {
     }
 
     #[test]
+    fn skips_editable_git_requirement_without_egg_fragment() {
+        let project = temporary_project();
+        fs::write(
+            project.join("requirements.txt"),
+            "-e git+https://github.com/example/repo.git@main\n",
+        )
+        .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert!(
+            dependencies.is_empty(),
+            "editable Git URL without #egg= should be skipped"
+        );
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
     fn discovers_pyproject_dependencies() {
         let project = temporary_project();
 
