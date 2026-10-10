@@ -842,14 +842,32 @@ pub fn parse_requirement(input: &str) -> Result<ParsedRequirement, String> {
         Some((name, url)) => {
             let url = url.trim();
 
-            if !(url.starts_with("https://")
-                || url.starts_with("http://")
-                || url.starts_with("file://")
-                || url.starts_with("git+https://")
-                || url.starts_with("git+http://")
-                || url.starts_with("git+ssh://")
-                || url.starts_with("git+file://"))
-            {
+            let is_supported_url = ["https://", "http://", "file://"]
+                .iter()
+                .any(|prefix| url.starts_with(prefix));
+
+            let is_supported_vcs_url = [
+                "git+https://",
+                "git+http://",
+                "git+ssh://",
+                "git+file://",
+                "hg+https://",
+                "hg+http://",
+                "hg+ssh://",
+                "hg+file://",
+                "svn+https://",
+                "svn+http://",
+                "svn+ssh://",
+                "svn+file://",
+                "bzr+https://",
+                "bzr+http://",
+                "bzr+ssh://",
+                "bzr+file://",
+            ]
+            .iter()
+            .any(|prefix| url.starts_with(prefix));
+
+            if !(is_supported_url || is_supported_vcs_url) {
                 return Err("Invalid direct URL".to_string());
             }
 
@@ -2158,6 +2176,56 @@ dependencies = [
         assert_eq!(dependencies[0].name, "mypackage");
 
         fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn parses_supported_vcs_direct_urls() {
+        for (vcs, transport) in [
+            ("git", "https"),
+            ("git", "http"),
+            ("git", "ssh"),
+            ("git", "file"),
+            ("hg", "https"),
+            ("hg", "http"),
+            ("hg", "ssh"),
+            ("hg", "file"),
+            ("svn", "https"),
+            ("svn", "http"),
+            ("svn", "ssh"),
+            ("svn", "file"),
+            ("bzr", "https"),
+            ("bzr", "http"),
+            ("bzr", "ssh"),
+            ("bzr", "file"),
+        ] {
+            let input = format!("mypackage @ {vcs}+{transport}://example.com/repo");
+
+            let parsed = parse_requirement(&input)
+                .unwrap_or_else(|error| panic!("Failed to parse {input}: {error}"));
+
+            assert_eq!(parsed.name, "mypackage");
+            assert_eq!(
+                parsed.url.as_deref(),
+                Some(format!("{vcs}+{transport}://example.com/repo").as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unsupported_vcs_direct_urls() {
+        for url in [
+            "cvs+https://example.com/repo",
+            "git+ftp://example.com/repo",
+            "hg+ftp://example.com/repo",
+            "svn+ftp://example.com/repo",
+            "bzr+ftp://example.com/repo",
+        ] {
+            let input = format!("mypackage @ {url}");
+            assert!(
+                parse_requirement(&input).is_err(),
+                "Expected unsupported URL to be rejected: {input}"
+            );
+        }
     }
 
     fn temporary_project() -> std::path::PathBuf {
