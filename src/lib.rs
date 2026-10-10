@@ -1,3 +1,4 @@
+use pep508_rs::{MarkerEnvironment, Requirement, VerbatimUrl};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -40,6 +41,23 @@ pub struct Dependency {
     pub url: Option<String>,
     pub marker: Option<String>,
     pub source: PathBuf,
+}
+
+pub fn dependency_applies_to_environment(
+    dependency: &Dependency,
+    environment: &MarkerEnvironment,
+) -> Result<bool, String> {
+    let Some(marker) = dependency.marker.as_deref() else {
+        return Ok(true);
+    };
+
+    let requirement = format!("{}; {}", dependency.name, marker);
+    let working_dir = dependency.source.parent().unwrap_or_else(|| Path::new("."));
+
+    let parsed = Requirement::<VerbatimUrl>::parse(&requirement, working_dir)
+        .map_err(|error| format!("Invalid environment marker: {error}"))?;
+
+    Ok(parsed.evaluate_markers(environment, &[]))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -399,6 +417,19 @@ fn add_requirement(requirement: &str, source: &Path, dependencies: &mut Vec<Depe
             (requirement, Some(marker.trim().to_owned()))
         });
 
+    if let Some(marker) = marker.as_deref() {
+        let marker_requirement = format!("compatpy-marker-check; {marker}");
+        let working_dir = source.parent().unwrap_or_else(|| Path::new("."));
+
+        let marker_result =
+            Requirement::<pep508_rs::VerbatimUrl>::parse(&marker_requirement, working_dir);
+
+        if marker_result.is_err() {
+            test_debug!("add_requirement: ignoring invalid environment marker");
+            return;
+        }
+    }
+
     let requirement = requirement.trim();
 
     let (name_and_extras, url) = match requirement.split_once('@') {
@@ -602,6 +633,32 @@ pub fn compatible_python_versions(releases: &[PackageRelease]) -> Vec<String> {
     }
 
     compatible_versions
+}
+
+pub fn compatible_python_versions_for_environment(
+    dependencies: &[Dependency],
+    releases: &[Option<PackageRelease>],
+    environment: &MarkerEnvironment,
+) -> Result<Vec<String>, String> {
+    if dependencies.len() != releases.len() {
+        return Err("Each dependency must have a corresponding selected release".to_owned());
+    }
+
+    let mut applicable_releases = Vec::new();
+
+    for (dependency, release) in dependencies.iter().zip(releases) {
+        if !dependency_applies_to_environment(dependency, environment)? {
+            continue;
+        }
+
+        if let Some(release) = release {
+            applicable_releases.push(release.clone());
+        } else {
+            return Ok(Vec::new());
+        }
+    }
+
+    Ok(compatible_python_versions(&applicable_releases))
 }
 
 fn python_version_satisfies(version: &str, requirement: &str) -> bool {
@@ -937,11 +994,44 @@ pub fn parse_requirement(input: &str) -> Result<ParsedRequirement, String> {
 mod tests {
 
     use super::{
-        Command, Dependency, ParsedRequirement, discover_dependencies, normalize_package_name,
-        parse_args, parse_requirement, select_package_release,
+        Command, Dependency, PackageRelease, ParsedRequirement, dependency_applies_to_environment,
+        discover_dependencies, normalize_package_name, parse_args, parse_requirement,
+        select_package_release,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_marker_environment(
+        python_version: &str,
+        sys_platform: &str,
+    ) -> pep508_rs::MarkerEnvironment {
+        pep508_rs::MarkerEnvironment::try_from(pep508_rs::MarkerEnvironmentBuilder {
+            implementation_name: "cpython",
+            implementation_version: "3.12.0",
+            os_name: if sys_platform == "win32" {
+                "nt"
+            } else {
+                "posix"
+            },
+            platform_machine: "x86_64",
+            platform_python_implementation: "CPython",
+            platform_release: "",
+            platform_system: if sys_platform == "win32" {
+                "Windows"
+            } else {
+                "Linux"
+            },
+            platform_version: "",
+            python_full_version: if python_version == "3.12" {
+                "3.12.0"
+            } else {
+                "3.9.0"
+            },
+            python_version,
+            sys_platform,
+        })
+        .unwrap()
+    }
 
     #[test]
     fn help_is_the_default_command() {
@@ -1175,7 +1265,7 @@ dependencies = [
     }
 
     #[test]
-    fn exact_version_does_not_match_prerelease() {
+    fn selects_stable_exact_match_when_prerelease_also_exists() {
         let metadata = super::PackageMetadata {
             name: "example".to_owned(),
             latest_version: "3.9.0".to_owned(),
@@ -1350,11 +1440,6 @@ dependencies = [
         assert!(package_version_satisfies("3.12.0", "==3.12.*"));
         assert!(package_version_satisfies("3.12.5", "==3.12.*"));
         assert!(package_version_satisfies("3.12", "==3.12.*"));
-        println!(
-            "result: {}",
-            package_version_satisfies("3.13.0", "==3.12.*")
-        );
-        println!("prefix test: {:?}", "3.13.0".strip_prefix("3.12"));
         assert!(!package_version_satisfies("3.13.0", "==3.12.*"));
         assert!(!package_version_satisfies("3.120.0", "==3.12.*"));
     }
@@ -2146,17 +2231,31 @@ dependencies = [
     }
 
     #[test]
-    fn skips_unsupported_requirements_file_options() {
+    fn skips_requirements_options_without_skipping_valid_dependencies() {
         let project = temporary_project();
+
         fs::write(
             project.join("requirements.txt"),
-            "--index-url https://packages.example.com/simple\n",
+            "--index-url https://packages.example.com/simple\n\
+         requests>=2.0\n\
+         --extra-index-url https://backup.example.com/simple\n\
+         flask==3.0\n",
         )
         .unwrap();
 
         let dependencies = discover_dependencies(&project).unwrap();
 
-        assert!(dependencies.is_empty());
+        assert_eq!(dependencies.len(), 2);
+        assert!(
+            dependencies
+                .iter()
+                .any(|d| { d.name == "requests" && d.specifier.as_deref() == Some(">=2.0") })
+        );
+        assert!(
+            dependencies
+                .iter()
+                .any(|d| { d.name == "flask" && d.specifier.as_deref() == Some("==3.0") })
+        );
 
         fs::remove_dir_all(project).unwrap();
     }
@@ -2226,6 +2325,158 @@ dependencies = [
                 "Expected unsupported URL to be rejected: {input}"
             );
         }
+    }
+    #[test]
+    fn accepts_valid_compound_environment_markers() {
+        let project = temporary_project();
+
+        fs::write(
+            project.join("requirements.txt"),
+            "requests>=2.0; python_version >= \"3.10\" and sys_platform == \"win32\"\n",
+        )
+        .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 1);
+        assert_eq!(dependencies[0].name, "requests");
+        assert_eq!(
+            dependencies[0].marker.as_deref(),
+            Some("python_version >= \"3.10\" and sys_platform == \"win32\"")
+        );
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn skips_requirements_with_invalid_environment_markers() {
+        let project = temporary_project();
+
+        fs::write(
+            project.join("requirements.txt"),
+            "requests>=2.0; python_version >>> \"3.10\"\nflask==3.0\n",
+        )
+        .unwrap();
+
+        let dependencies = discover_dependencies(&project).unwrap();
+
+        assert_eq!(dependencies.len(), 1);
+        assert_eq!(dependencies[0].name, "flask");
+
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn dependency_marker_matches_python_version() {
+        let dependency = Dependency {
+            name: "requests".to_owned(),
+            extras: vec![],
+            specifier: None,
+            url: None,
+            marker: Some("python_version >= \"3.10\"".to_owned()),
+            source: std::path::PathBuf::from("requirements.txt"),
+        };
+
+        let environment = test_marker_environment("3.12", "linux");
+
+        assert_eq!(
+            dependency_applies_to_environment(&dependency, &environment).unwrap(),
+            true
+        );
+    }
+
+    #[test]
+    fn dependency_marker_rejects_mismatched_python_version() {
+        let dependency = Dependency {
+            name: "requests".to_owned(),
+            extras: vec![],
+            specifier: None,
+            url: None,
+            marker: Some("python_version >= \"3.10\"".to_owned()),
+            source: std::path::PathBuf::from("requirements.txt"),
+        };
+
+        let environment = test_marker_environment("3.9", "linux");
+
+        assert_eq!(
+            dependency_applies_to_environment(&dependency, &environment).unwrap(),
+            false
+        );
+    }
+
+    #[test]
+    fn dependency_marker_checks_platform_and_compound_conditions() {
+        let dependency = Dependency {
+            name: "pywin32".to_owned(),
+            extras: vec![],
+            specifier: None,
+            url: None,
+            marker: Some("python_version >= \"3.10\" and sys_platform == \"win32\"".to_owned()),
+            source: std::path::PathBuf::from("requirements.txt"),
+        };
+
+        let windows = test_marker_environment("3.12", "win32");
+        let linux = test_marker_environment("3.12", "linux");
+
+        assert!(dependency_applies_to_environment(&dependency, &windows).unwrap());
+        assert!(!dependency_applies_to_environment(&dependency, &linux).unwrap());
+    }
+
+    #[test]
+    fn dependency_without_marker_applies_to_every_environment() {
+        let dependency = Dependency {
+            name: "requests".to_owned(),
+            extras: vec![],
+            specifier: None,
+            url: None,
+            marker: None,
+            source: std::path::PathBuf::from("requirements.txt"),
+        };
+
+        let environment = test_marker_environment("3.9", "linux");
+
+        assert!(dependency_applies_to_environment(&dependency, &environment).unwrap());
+    }
+
+    #[test]
+    fn compatibility_ignores_dependencies_for_other_platforms() {
+        let dependency = Dependency {
+            name: "pywin32".to_owned(),
+            extras: vec![],
+            specifier: None,
+            url: None,
+            marker: Some("sys_platform == \"win32\"".to_owned()),
+            source: std::path::PathBuf::from("requirements.txt"),
+        };
+
+        let release = PackageRelease {
+            version: "1.0.0".to_owned(),
+            requires_python: Some(">=3.12".to_owned()),
+        };
+
+        let linux = test_marker_environment("3.12", "linux");
+
+        let compatible = super::compatible_python_versions_for_environment(
+            &[dependency],
+            &[Some(release)],
+            &linux,
+        )
+        .unwrap();
+
+        assert_eq!(
+            compatible,
+            vec![
+                "3.7".to_owned(),
+                "3.8".to_owned(),
+                "3.9".to_owned(),
+                "3.10".to_owned(),
+                "3.11".to_owned(),
+                "3.12".to_owned(),
+                "3.13".to_owned(),
+                "3.14".to_owned(),
+                "3.15".to_owned(),
+            ]
+        );
     }
 
     fn temporary_project() -> std::path::PathBuf {
