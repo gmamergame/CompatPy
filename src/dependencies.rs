@@ -1,0 +1,468 @@
+use crate::pypi::normalize_package_name;
+use pep508_rs::{MarkerEnvironment, Requirement, VerbatimUrl};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Dependency {
+    pub name: String,
+    pub extras: Vec<String>,
+    pub specifier: Option<String>,
+    pub url: Option<String>,
+    pub marker: Option<String>,
+    pub source: PathBuf,
+}
+
+pub fn dependency_applies_to_environment(
+    dependency: &Dependency,
+    environment: &MarkerEnvironment,
+) -> Result<bool, String> {
+    let Some(marker) = dependency.marker.as_deref() else {
+        return Ok(true);
+    };
+
+    let requirement = format!("{}; {}", dependency.name, marker);
+    let working_dir = dependency.source.parent().unwrap_or_else(|| Path::new("."));
+
+    let parsed = Requirement::<VerbatimUrl>::parse(&requirement, working_dir)
+        .map_err(|error| format!("Invalid environment marker: {error}"))?;
+
+    Ok(parsed.evaluate_markers(environment, &[]))
+}
+
+pub fn discover_dependencies(project_path: &Path) -> Result<Vec<Dependency>, String> {
+    test_debug!(
+        "discover_dependencies: project path '{}'",
+        project_path.display()
+    );
+    let mut dependencies = Vec::new();
+
+    let files = dependency_files(project_path)?;
+    test_debug!(
+        "discover_dependencies: found {} candidate file(s): {files:?}",
+        files.len()
+    );
+
+    for path in files {
+        test_debug!("discover_dependencies: reading '{}'", path.display());
+        let contents = fs::read_to_string(&path)
+            .map_err(|error| format!("failed to read '{}': {error}", path.display()))?;
+        test_debug!(
+            "discover_dependencies: contents of '{}':\n{}",
+            path.display(),
+            contents
+        );
+
+        if path.file_name().and_then(|name| name.to_str()) == Some("pyproject.toml") {
+            test_debug!(
+                "discover_dependencies: parsing '{}' as pyproject.toml",
+                path.display()
+            );
+            discover_from_pyproject(&contents, &path, &mut dependencies)?;
+        } else {
+            test_debug!(
+                "discover_dependencies: parsing '{}' as requirements",
+                path.display()
+            );
+            discover_from_requirements(&contents, &path, &mut dependencies);
+        }
+    }
+
+    dependencies.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| right.specifier.cmp(&left.specifier))
+            .then_with(|| left.marker.cmp(&right.marker))
+            .then_with(|| left.source.cmp(&right.source))
+    });
+    test_debug!("discover_dependencies: final dependencies: {dependencies:#?}");
+    Ok(dependencies)
+}
+
+fn dependency_files(project_path: &Path) -> Result<Vec<PathBuf>, String> {
+    test_debug!("dependency_files: scanning '{}'", project_path.display());
+    let mut files = Vec::new();
+
+    let requirements = project_path.join("requirements.txt");
+    if requirements.is_file() {
+        test_debug!("dependency_files: found '{}'", requirements.display());
+        files.push(requirements);
+    } else {
+        test_debug!("dependency_files: '{}' is absent", requirements.display());
+    }
+
+    let requirements_dir = project_path.join("requirements");
+    if requirements_dir.is_dir() {
+        test_debug!(
+            "dependency_files: scanning directory '{}'",
+            requirements_dir.display()
+        );
+        let entries = fs::read_dir(&requirements_dir)
+            .map_err(|error| format!("failed to read '{}': {error}", requirements_dir.display()))?;
+
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                format!(
+                    "failed to inspect '{}': {error}",
+                    requirements_dir.display()
+                )
+            })?;
+
+            let path = entry.path();
+
+            if path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("txt") {
+                test_debug!(
+                    "dependency_files: found requirements file '{}'",
+                    path.display()
+                );
+                files.push(path);
+            } else {
+                test_debug!("dependency_files: ignoring entry '{}'", path.display());
+            }
+        }
+    } else {
+        test_debug!(
+            "dependency_files: '{}' is absent",
+            requirements_dir.display()
+        );
+    }
+
+    let pyproject = project_path.join("pyproject.toml");
+    if pyproject.is_file() {
+        test_debug!("dependency_files: found '{}'", pyproject.display());
+        files.push(pyproject);
+    } else {
+        test_debug!("dependency_files: '{}' is absent", pyproject.display());
+    }
+
+    files.sort();
+    test_debug!("dependency_files: sorted candidate files: {files:?}");
+    Ok(files)
+}
+
+pub(crate) fn strip_inline_comment(line: &str) -> &str {
+    for (index, character) in line.char_indices() {
+        if character == '#'
+            && index > 0
+            && line[..index]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_whitespace)
+        {
+            return line[..index].trim_end();
+        }
+    }
+
+    line
+}
+
+fn normalize_editable_requirement(requirement: &str) -> Option<String> {
+    let (_, fragment) = requirement.split_once('#')?;
+
+    let egg = fragment
+        .split('&')
+        .find_map(|part| part.strip_prefix("egg="))?;
+
+    let (package, extras) = match egg.split_once('[') {
+        Some((package, extras)) => {
+            let extras = extras.strip_suffix(']')?;
+            (package, Some(extras))
+        }
+        None => (egg, None),
+    };
+
+    let package = package.trim();
+
+    if package.is_empty()
+        || !package
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
+    {
+        return None;
+    }
+
+    let extras = match extras {
+        Some(extras) if !extras.trim().is_empty() => format!("[{}]", extras.trim()),
+        Some(_) => return None,
+        None => String::new(),
+    };
+
+    Some(format!("{package}{extras} @ {requirement}"))
+}
+
+fn parse_editable_requirement(line: &str) -> Option<String> {
+    line.strip_prefix("--editable ")
+        .or_else(|| line.strip_prefix("-e "))
+        .map(str::trim)
+        .filter(|requirement| !requirement.is_empty())
+        .map(str::to_owned)
+}
+
+fn discover_from_requirements(contents: &str, source: &Path, dependencies: &mut Vec<Dependency>) {
+    let mut logical_line = String::new();
+
+    for physical_line in contents.lines() {
+        let line = physical_line.trim();
+
+        // Skip blank lines and comments when not inside a continuation.
+        if logical_line.is_empty() && (line.is_empty() || line.starts_with('#')) {
+            test_debug!("requirements: skipping line {line:?}");
+            continue;
+        }
+
+        // A trailing backslash continues the requirement on the next line.
+        if let Some(without_backslash) = line.strip_suffix('\\') {
+            if !logical_line.is_empty() {
+                logical_line.push(' ');
+            }
+
+            logical_line.push_str(without_backslash.trim_end());
+            continue;
+        }
+
+        if !logical_line.is_empty() {
+            logical_line.push(' ');
+        }
+
+        logical_line.push_str(line);
+
+        let requirement = strip_inline_comment(logical_line.trim()).trim();
+
+        if requirement.is_empty() {
+            test_debug!("requirements: skipping empty logical line");
+        } else if let Some(editable) = parse_editable_requirement(requirement) {
+            test_debug!("requirements: parsing editable requirement {editable:?}");
+
+            if let Some(normalized) = normalize_editable_requirement(&editable) {
+                add_requirement(&normalized, source, dependencies);
+            } else {
+                test_debug!(
+                    "requirements: skipping editable requirement without a valid egg fragment"
+                );
+            }
+        } else if !requirement.starts_with('-') {
+            test_debug!("requirements: parsing logical line {requirement:?}");
+            add_requirement(requirement, source, dependencies);
+        } else {
+            test_debug!("requirements: skipping unsupported option {requirement:?}");
+        }
+
+        logical_line.clear();
+    }
+
+    // Process any remaining content, even if the file ends with a backslash.
+    if !logical_line.trim().is_empty() {
+        let requirement = strip_inline_comment(logical_line.trim()).trim();
+
+        if !requirement.is_empty() {
+            if let Some(editable) = parse_editable_requirement(requirement) {
+                add_requirement(&editable, source, dependencies);
+            } else if !requirement.starts_with('-') {
+                add_requirement(requirement, source, dependencies);
+            }
+        }
+    }
+}
+
+fn discover_from_pyproject(
+    contents: &str,
+    source: &Path,
+    dependencies: &mut Vec<Dependency>,
+) -> Result<(), String> {
+    let document: toml::Value = toml::from_str(contents)
+        .map_err(|error| format!("failed to parse '{}': {error}", source.display()))?;
+    test_debug!("pyproject: parsed document: {document:#?}");
+
+    if let Some(array) = document
+        .get("project")
+        .and_then(|project| project.get("dependencies"))
+        .and_then(toml::Value::as_array)
+    {
+        test_debug!(
+            "pyproject: found {} project dependency item(s)",
+            array.len()
+        );
+        for dependency in array.iter().filter_map(toml::Value::as_str) {
+            test_debug!("pyproject: parsing dependency {dependency:?}");
+            add_requirement(dependency, source, dependencies);
+        }
+    } else {
+        test_debug!("pyproject: no project.dependencies array found");
+    }
+
+    Ok(())
+}
+
+fn is_supported_direct_url(url: &str) -> bool {
+    [
+        "https://",
+        "http://",
+        "file://",
+        "git+https://",
+        "git+http://",
+        "git+ssh://",
+        "git+file://",
+        "hg+https://",
+        "hg+http://",
+        "hg+ssh://",
+        "hg+file://",
+        "svn+https://",
+        "svn+http://",
+        "svn+ssh://",
+        "svn+file://",
+        "bzr+https://",
+        "bzr+http://",
+        "bzr+ssh://",
+        "bzr+file://",
+    ]
+    .iter()
+    .any(|prefix| url.starts_with(prefix))
+}
+
+fn add_requirement(requirement: &str, source: &Path, dependencies: &mut Vec<Dependency>) {
+    test_debug!(
+        "add_requirement: input {requirement:?} from '{}'",
+        source.display()
+    );
+
+    let (requirement, marker) = requirement
+        .split_once(';')
+        .map_or((requirement, None), |(requirement, marker)| {
+            (requirement, Some(marker.trim().to_owned()))
+        });
+
+    if let Some(marker) = marker.as_deref() {
+        let marker_requirement = format!("compatpy-marker-check; {marker}");
+        let working_dir = source.parent().unwrap_or_else(|| Path::new("."));
+
+        let marker_result =
+            Requirement::<pep508_rs::VerbatimUrl>::parse(&marker_requirement, working_dir);
+
+        if marker_result.is_err() {
+            test_debug!("add_requirement: ignoring invalid environment marker");
+            return;
+        }
+    }
+
+    let requirement = requirement.trim();
+
+    let (name_and_extras, url) = match requirement.split_once('@') {
+        Some((name, url)) => {
+            let url = url.trim();
+
+            if !is_supported_direct_url(url) {
+                test_debug!("add_requirement: ignoring unsupported or invalid direct URL");
+                return;
+            }
+
+            (name.trim(), Some(url.to_owned()))
+        }
+
+        None => (requirement, None),
+    };
+
+    let (name, extras, specifier) = if let Some(start) = name_and_extras.find('[') {
+        let Some(end) = name_and_extras.find(']') else {
+            test_debug!("add_requirement: ignoring extras without closing bracket");
+            return;
+        };
+
+        let name = name_and_extras[..start].trim();
+        let extras_text = &name_and_extras[start + 1..end];
+        let remainder = name_and_extras[end + 1..].trim();
+
+        if extras_text.trim().is_empty() {
+            test_debug!("add_requirement: ignoring empty extras");
+            return;
+        }
+
+        let extras: Vec<String> = extras_text
+            .split(',')
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .collect();
+
+        if extras.iter().any(|extra| {
+            extra.is_empty()
+                || !extra
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
+        }) {
+            test_debug!("add_requirement: ignoring invalid extras");
+            return;
+        }
+
+        if !remainder.is_empty()
+            && ![">=", "<=", "==", "!=", "~=", ">", "<", "=", "!", "~", "^"]
+                .iter()
+                .any(|operator| remainder.starts_with(operator))
+        {
+            test_debug!("add_requirement: ignoring invalid text after extras");
+            return;
+        }
+
+        let specifier = if url.is_none() {
+            (!remainder.is_empty()).then(|| remainder.to_owned())
+        } else {
+            if !remainder.is_empty() {
+                test_debug!("add_requirement: ignoring specifier after direct URL");
+                return;
+            }
+            None
+        };
+
+        (name, extras, specifier)
+    } else {
+        let name_end = name_and_extras
+            .find(['<', '>', '=', '!', '~', '^'])
+            .unwrap_or(name_and_extras.len());
+
+        let name = name_and_extras[..name_end].trim();
+        let remainder = name_and_extras[name_end..].trim();
+
+        if !remainder.is_empty()
+            && ![">=", "<=", "==", "!=", "~=", ">", "<", "=", "!", "~", "^"]
+                .iter()
+                .any(|operator| remainder.starts_with(operator))
+        {
+            test_debug!("add_requirement: ignoring invalid specifier");
+            return;
+        }
+
+        let specifier = if url.is_none() {
+            (!remainder.is_empty()).then(|| remainder.to_owned())
+        } else {
+            if !remainder.is_empty() {
+                test_debug!("add_requirement: ignoring specifier after direct URL");
+                return;
+            }
+            None
+        };
+
+        (name, Vec::new(), specifier)
+    };
+
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
+    {
+        test_debug!("add_requirement: ignoring invalid package name");
+        return;
+    }
+
+    let dependency = Dependency {
+        name: normalize_package_name(name),
+        extras,
+        specifier,
+        url,
+        marker,
+        source: source.to_path_buf(),
+    };
+
+    test_debug!("add_requirement: normalized dependency {dependency:#?}");
+
+    if !dependencies.contains(&dependency) {
+        dependencies.push(dependency);
+    }
+}
