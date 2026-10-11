@@ -1,5 +1,33 @@
 # Changelog
 
+---
+
+## 26.10.2 - 2026-10-10
+
+### Added
+- Support Git and VCS direct references, including editable VCS requirements.
+- Support direct URL dependencies.
+- Add Python 3.15 to the compatibility range.
+- Support package extras.
+
+### Fixed
+- Fix `--version` and `--help` CLI flags.
+- Expand requirements discovery and VCS tests.
+
+---
+
+## 26.10.1 - 2026-10-10
+
+### Fixed
+- Fix Linux ARM64 release builds and cross-compilation configuration.
+- Improve OpenSSL configuration and diagnostics for ARM64 builds.
+- Fix release workflow issues affecting binary builds.
+
+### Changed
+- Update GitHub Actions checkout to Node.js 24.
+
+---
+
 ## 1.0.0 - 2026-10-08
 
 ### Added
