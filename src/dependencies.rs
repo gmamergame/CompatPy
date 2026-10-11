@@ -1,4 +1,5 @@
 use crate::pypi::normalize_package_name;
+use pep440_rs::Version;
 use pep508_rs::{MarkerEnvironment, Requirement, VerbatimUrl};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,6 +29,35 @@ pub fn dependency_applies_to_environment(
         .map_err(|error| format!("Invalid environment marker: {error}"))?;
 
     Ok(parsed.evaluate_markers(environment, &[]))
+}
+
+pub fn dependency_applies_to_python_version(
+    dependency: &Dependency,
+    environment: &MarkerEnvironment,
+    python_version: &str,
+) -> Result<bool, String> {
+    let current_python_version = environment.python_version().to_string();
+
+    let full_version = if python_version == current_python_version {
+        environment.python_full_version().to_string()
+    } else {
+        format!("{python_version}.0")
+    };
+
+    let candidate_version = python_version
+        .parse::<Version>()
+        .map_err(|error| format!("Invalid candidate Python version: {error}"))?;
+
+    let candidate_full_version = full_version
+        .parse::<Version>()
+        .map_err(|error| format!("Invalid candidate full Python version: {error}"))?;
+
+    let candidate_environment = environment
+        .clone()
+        .with_python_version(candidate_version)
+        .with_python_full_version(candidate_full_version);
+
+    dependency_applies_to_environment(dependency, &candidate_environment)
 }
 
 pub fn discover_dependencies(project_path: &Path) -> Result<Vec<Dependency>, String> {
