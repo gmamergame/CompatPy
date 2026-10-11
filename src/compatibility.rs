@@ -1,4 +1,4 @@
-use crate::dependencies::{Dependency, dependency_applies_to_environment};
+use crate::dependencies::{Dependency, dependency_applies_to_python_version};
 use crate::pypi::PackageMetadata;
 use crate::pypi::PackageRelease;
 use pep508_rs::MarkerEnvironment;
@@ -58,21 +58,43 @@ pub fn compatible_python_versions_for_environment(
         return Err("Each dependency must have a corresponding selected release".to_owned());
     }
 
-    let mut applicable_releases = Vec::new();
+    let candidates = [
+        "3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14", "3.15",
+    ];
 
-    for (dependency, release) in dependencies.iter().zip(releases) {
-        if !dependency_applies_to_environment(dependency, environment)? {
+    let mut compatible_versions = Vec::new();
+
+    for candidate in candidates {
+        let mut applicable_releases = Vec::new();
+        let mut missing_release = false;
+
+        for (dependency, release) in dependencies.iter().zip(releases) {
+            if !dependency_applies_to_python_version(dependency, environment, candidate)? {
+                continue;
+            }
+
+            match release {
+                Some(release) => applicable_releases.push(release.clone()),
+                None => {
+                    missing_release = true;
+                    break;
+                }
+            }
+        }
+
+        if missing_release {
             continue;
         }
 
-        if let Some(release) = release {
-            applicable_releases.push(release.clone());
-        } else {
-            return Ok(Vec::new());
+        if compatible_python_versions(&applicable_releases)
+            .iter()
+            .any(|version| version == candidate)
+        {
+            compatible_versions.push(candidate.to_owned());
         }
     }
 
-    Ok(compatible_python_versions(&applicable_releases))
+    Ok(compatible_versions)
 }
 
 fn python_version_satisfies(version: &str, requirement: &str) -> bool {

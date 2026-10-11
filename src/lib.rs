@@ -1512,6 +1512,244 @@ dependencies = [
         );
     }
 
+    #[test]
+    fn dependency_marker_respects_parentheses_and_boolean_precedence() {
+        let dependency = Dependency {
+            name: "example".to_owned(),
+            extras: vec![],
+            specifier: None,
+            url: None,
+            marker: Some(
+                "(python_version >= \"3.10\" and sys_platform == \"win32\") \
+             or python_version == \"3.9\""
+                    .to_owned(),
+            ),
+            source: std::path::PathBuf::from("requirements.txt"),
+        };
+
+        let windows = test_marker_environment("3.12", "win32");
+        let linux = test_marker_environment("3.12", "linux");
+        let python39 = test_marker_environment("3.9", "linux");
+
+        assert!(dependency_applies_to_environment(&dependency, &windows).unwrap());
+        assert!(!dependency_applies_to_environment(&dependency, &linux).unwrap());
+        assert!(dependency_applies_to_environment(&dependency, &python39).unwrap());
+    }
+
+    #[test]
+    fn dependency_marker_supports_in_and_not_in() {
+        let included = Dependency {
+            name: "example".to_owned(),
+            extras: vec![],
+            specifier: None,
+            url: None,
+            marker: Some("sys_platform in \"linux win32\"".to_owned()),
+            source: std::path::PathBuf::from("requirements.txt"),
+        };
+
+        let excluded = Dependency {
+            marker: Some("sys_platform not in \"linux darwin\"".to_owned()),
+            ..included.clone()
+        };
+
+        let linux = test_marker_environment("3.12", "linux");
+        let windows = test_marker_environment("3.12", "win32");
+
+        assert!(dependency_applies_to_environment(&included, &linux).unwrap());
+        assert!(dependency_applies_to_environment(&included, &windows).unwrap());
+
+        assert!(!dependency_applies_to_environment(&excluded, &linux).unwrap());
+        assert!(dependency_applies_to_environment(&excluded, &windows).unwrap());
+    }
+
+    #[test]
+    fn dependency_marker_checks_python_full_version_boundaries() {
+        let dependency = Dependency {
+            name: "example".to_owned(),
+            extras: vec![],
+            specifier: None,
+            url: None,
+            marker: Some("python_full_version >= \"3.12.0\"".to_owned()),
+            source: std::path::PathBuf::from("requirements.txt"),
+        };
+
+        let python312 = test_marker_environment("3.12", "linux");
+        let python39 = test_marker_environment("3.9", "linux");
+
+        assert!(dependency_applies_to_environment(&dependency, &python312).unwrap());
+        assert!(!dependency_applies_to_environment(&dependency, &python39).unwrap());
+    }
+
+    #[test]
+    fn dependency_marker_returns_error_for_invalid_expression() {
+        let dependency = Dependency {
+            name: "example".to_owned(),
+            extras: vec![],
+            specifier: None,
+            url: None,
+            marker: Some("python_version >>> \"3.10\"".to_owned()),
+            source: std::path::PathBuf::from("requirements.txt"),
+        };
+
+        let environment = test_marker_environment("3.12", "linux");
+
+        assert!(dependency_applies_to_environment(&dependency, &environment).is_err());
+    }
+
+    #[test]
+    fn compatibility_evaluates_markers_for_each_candidate_python_version() {
+        let dependency = Dependency {
+            name: "example".to_owned(),
+            extras: vec![],
+            specifier: None,
+            url: None,
+            marker: Some("python_version < \"3.10\"".to_owned()),
+            source: std::path::PathBuf::from("requirements.txt"),
+        };
+
+        let release = PackageRelease {
+            version: "2.0.0".to_owned(),
+            requires_python: Some(">=3.10".to_owned()),
+        };
+
+        let environment = test_marker_environment("3.12", "linux");
+
+        let compatible = super::compatible_python_versions_for_environment(
+            &[dependency],
+            &[Some(release)],
+            &environment,
+        )
+        .unwrap();
+
+        assert_eq!(
+            compatible,
+            vec![
+                "3.10".to_owned(),
+                "3.11".to_owned(),
+                "3.12".to_owned(),
+                "3.13".to_owned(),
+                "3.14".to_owned(),
+                "3.15".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn compatibility_evaluates_markers_for_each_candidate_python_version_second() {
+        let dependency = Dependency {
+            name: "example".to_owned(),
+            extras: vec![],
+            specifier: None,
+            url: None,
+            marker: Some("python_version < \"3.10\"".to_owned()),
+            source: std::path::PathBuf::from("requirements.txt"),
+        };
+
+        let release = PackageRelease {
+            version: "2.0.0".to_owned(),
+            requires_python: Some(">=3.10".to_owned()),
+        };
+
+        let environment = test_marker_environment("3.12", "linux");
+
+        let compatible = crate::compatibility::compatible_python_versions_for_environment(
+            &[dependency],
+            &[Some(release)],
+            &environment,
+        )
+        .unwrap();
+
+        assert_eq!(compatible, ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]);
+    }
+
+    #[test]
+    fn dependency_marker_evaluates_candidate_python_full_version() {
+        let dependency = Dependency {
+            name: "example".to_owned(),
+            extras: vec![],
+            specifier: None,
+            url: None,
+            marker: Some("python_full_version < \"3.10.1\"".to_owned()),
+            source: std::path::PathBuf::from("requirements.txt"),
+        };
+
+        let environment = test_marker_environment("3.12", "linux");
+
+        assert!(
+            crate::dependencies::dependency_applies_to_python_version(
+                &dependency,
+                &environment,
+                "3.10",
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn dependency_marker_combines_candidate_python_and_platform() {
+        let dependency = Dependency {
+            name: "example".to_owned(),
+            extras: vec![],
+            specifier: None,
+            url: None,
+            marker: Some("python_version >= \"3.10\" and sys_platform == \"win32\"".to_owned()),
+            source: std::path::PathBuf::from("requirements.txt"),
+        };
+
+        let windows = test_marker_environment("3.12", "win32");
+        let linux = test_marker_environment("3.12", "linux");
+
+        assert!(
+            crate::dependencies::dependency_applies_to_python_version(
+                &dependency,
+                &windows,
+                "3.10",
+            )
+            .unwrap()
+        );
+
+        assert!(
+        !crate::dependencies::dependency_applies_to_python_version(
+            &dependency,
+            &linux,
+            "3.10",
+        )
+        .unwrap()
+    );
+
+        assert!(
+            !crate::dependencies::dependency_applies_to_python_version(
+                &dependency,
+                &windows,
+                "3.9",
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn missing_release_is_ignored_when_dependency_marker_does_not_apply() {
+        let dependency = Dependency {
+            name: "optional-example".to_owned(),
+            extras: vec![],
+            specifier: None,
+            url: None,
+            marker: Some("python_version < \"3.10\"".to_owned()),
+            source: std::path::PathBuf::from("requirements.txt"),
+        };
+
+        let environment = test_marker_environment("3.12", "linux");
+
+        let compatible = crate::compatibility::compatible_python_versions_for_environment(
+            &[dependency],
+            &[None],
+            &environment,
+        )
+        .unwrap();
+
+        assert_eq!(compatible, ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]);
+    }
+
     fn temporary_project() -> std::path::PathBuf {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)

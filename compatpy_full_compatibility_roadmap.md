@@ -77,7 +77,7 @@ automatically.
 
 ### Marker evaluation
 
--   [ ] Evaluate markers independently for each candidate Python version.
+-   [x] Evaluate markers independently for each candidate Python version.
 -   [ ] Skip requirements whose markers evaluate false.
 -   [ ] Include requirements whose markers evaluate true.
 -   [ ] Handle markers combining Python and operating-system conditions.
